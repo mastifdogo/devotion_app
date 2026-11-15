@@ -5,6 +5,7 @@ import { createReadStream, readFileSync } from 'node:fs';
 import { createGzip } from 'node:zlib';
 import { stat } from 'node:fs/promises';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { TOPICS } from './wallpapers.js';
@@ -176,7 +177,9 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		version: config.version,
 		settings: settings.publicView(),
 		gmail: { configured: gmail.configured(), connected: gmail.connected(), email: settings.get('google_email'), redirect_uri: gmail.redirectUri() },
-		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady() },
+		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady(), audio_progress: pipeline.audioProgress },
+		// In a Proxmox container this is the container's memory limit.
+		memory_mb: Math.round((config.totalMemory ?? totalmem()) / 1048576),
 		can_install_updates: updater.canInstall(),
 		password_fixed: Boolean(config.adminPassword),
 		entries: db.prepare(`SELECT id, kind, lesson_number, label_manual, title, entry_date, scripture, source_subject, created_at,

@@ -395,6 +395,30 @@ test('wallpapers: found on Wallhaven by the admin, kept on the server, streamed 
 	assert.equal((await call('/admin/api/wallpapers/aaa111/delete', { body: {} })).status, 404);
 });
 
+test('the voice engine runs one at a time, however many ask', async () => {
+	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-queue-'));
+	try {
+		const db = openDb(dir);
+		const settings = new Settings(db, {});
+		settings.applyForm({ piper_model: '/voice.onnx' });
+		let running = 0, most = 0;
+		const runImpl = async (cmd, args) => {
+			running++; most = Math.max(most, running);
+			await new Promise((r) => setTimeout(r, 10));
+			writeFileSync(cmd === 'lame' ? args.at(-1) : args[args.indexOf('--output_file') + 1], Buffer.alloc(2048, 1));
+			running--;
+		};
+		const tts = new Tts({ settings, audioDir: path.join(dir, 'audio'), runImpl });
+		const results = await Promise.allSettled([1, 2, 3, 4].map((n) => tts.synthesize(`e${n}`, 'Hello.')));
+		assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'fulfilled', 'fulfilled', 'fulfilled']);
+		assert.equal(most, 1);
+		assert.equal(tts.waiting, 0);
+		db.close();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {
 	let fail = true;
 	const { call, pipeline, db } = await setup(t, { extractResult: () => { if (fail) throw Object.assign(new Error('boom'), { retryable: true }); return { entries: [{ title: 'T', entry_date: '2026-01-02', scripture: null, summary: null, body: 'B' }] }; } });
@@ -691,6 +715,8 @@ test('archive: old entries go to the share, and only then leave the server', asy
 	assert.throws(() => readFileSync(path.join(audioDir, audioFile)));
 	const state = await (await call('/admin/api/state')).json();
 	assert.deepEqual([state.archive.archived_total, state.archive.waiting, state.archive.last_error, state.entries.length], [1, 0, null, 0]);
+	assert.equal(typeof state.memory_mb, 'number');
+	assert.equal(state.pipeline.audio_progress, null);
 	// Nothing left to do, and audio is not made again for an archived entry.
 	assert.equal(await archiver.runOnce(), 0);
 	assert.equal((await pipeline.runOnce()).audio, 0);

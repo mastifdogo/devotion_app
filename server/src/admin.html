@@ -302,6 +302,10 @@ function render() {
 	if (!p.not_ready && p.last_error) s.append(el('p', 'Last check failed: ' + p.last_error, 'bad'));
 	if (p.last_result && !p.last_error) s.append(el('p', `Last check: ${p.last_result.found} matching emails, ${p.last_result.processed} new, ${p.last_result.errors} failed, ${p.last_result.audio} audio files made.`, 'muted small'));
 	if (p.audio_not_ready && state.settings.tts_provider !== 'none') s.append(el('p', 'No audio is being made: ' + p.audio_not_ready, 'bad'));
+	if (p.audio_progress) s.append(el('p', `Making audio in the background: ${p.audio_progress.done} of ${p.audio_progress.total} done. This uses the CPU fully while it runs; the pages and the app keep working.`, 'muted small'));
+	if (state.memory_mb && state.memory_mb < 900 && state.settings.tts_provider === 'piper') {
+		s.append(el('p', `This container has ${state.memory_mb} MB of memory. Making audio with the voices on this server works best with 1 GB: on the Proxmox host, run "pct set <container number> -memory 1024".`, 'bad small'));
+	}
 
 	const g = state.gmail;
 	$('gmail-status').textContent = g.connected ? 'Connected as ' + (g.email || 'unknown') + '.' : g.configured ? 'Not connected yet.' : 'Enter the OAuth client ID and secret, save, then connect.';

@@ -40,6 +40,8 @@ export class Pipeline {
 		this.running = false;
 		this.timer = null;
 		this.status = { last_run: null, last_error: null, last_result: null, running: false };
+		// What the audio work is doing, for the admin page: { done, total } while it runs.
+		this.audioProgress = null;
 	}
 
 	start() {
@@ -242,12 +244,22 @@ export class Pipeline {
 		let made = 0;
 		// Voice by voice, so every entry is listenable in the default voice first.
 		const order = [...voices].sort((x, y) => (y.id === this.tts.defaultVoiceId()) - (x.id === this.tts.defaultVoiceId()));
+		const todo = [];
 		for (const voice of order) {
 			for (const entry of entries) {
 				const row = have.get(entry.id, voice.id);
 				if (row?.file || (row?.error && !retryFailed)) continue;
-				if (await this.makeAudio(entry, voice.id)) made++;
+				todo.push([entry, voice.id]);
 			}
+		}
+		this.audioProgress = todo.length ? { done: 0, total: todo.length } : null;
+		try {
+			for (const [entry, voiceId] of todo) {
+				if (await this.makeAudio(entry, voiceId)) made++;
+				this.audioProgress.done++;
+			}
+		} finally {
+			this.audioProgress = null;
 		}
 		return made;
 	}

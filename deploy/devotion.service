@@ -15,9 +15,20 @@ Restart=on-failure
 RestartSec=5
 UMask=0027
 
-# The voice engine loads a neural model; this leaves it room in a 1 GB container.
-MemoryMax=768M
+# Limits relative to the container's own memory (lxcfs shows the container's
+# limit as the machine's), so they fit a 512 MB container as well as a larger
+# one. Above MemoryHigh the server is slowed and its memory reclaimed; at
+# MemoryMax the kernel ends the biggest process in the service (in practice
+# the voice engine) instead of the whole container running out and freezing.
+MemoryHigh=65%
+MemoryMax=80%
+# A voice engine ended that way fails that one audio file; the server stays up.
+OOMPolicy=continue
 TasksMax=128
+# The web pages and the app stay responsive while audio is being made: the
+# voice engine runs at the lowest CPU priority (see tts.js), and this keeps the
+# whole service from crowding out the container's own system.
+CPUWeight=50
 
 # Sandboxing. In an unprivileged Proxmox container these need the "nesting"
 # feature; without it the service fails with status 226/NAMESPACE.

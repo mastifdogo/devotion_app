@@ -67,13 +67,18 @@ function run(cmd, args, { input, timeoutMs = 15 * 60 * 1000 } = {}) {
 	return new Promise((resolve, reject) => {
 		let child;
 		try {
-			child = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+			// Lowest CPU priority, so on one core the web pages and the app still answer.
+			child = spawn('nice', ['-n', '19', cmd, ...args], { stdio: ['pipe', 'ignore', 'pipe'] });
 		} catch (err) {
 			reject(new TtsError(`Could not start ${cmd}: ${err.message}`));
 			return;
 		}
 		let stderr = '';
-		const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill('SIGKILL');
+		}, timeoutMs);
 		child.stderr.on('data', (d) => (stderr = (stderr + d).slice(-2000)));
 		child.on('error', (err) => {
 			clearTimeout(timer);
@@ -82,6 +87,8 @@ function run(cmd, args, { input, timeoutMs = 15 * 60 * 1000 } = {}) {
 		child.on('close', (code, signal) => {
 			clearTimeout(timer);
 			if (code === 0) resolve();
+			else if (code === 127) reject(new TtsError(`${cmd} is not installed on this server.`));
+			else if (signal === 'SIGKILL' && !timedOut) reject(new TtsError(`${cmd} was stopped for using too much memory. Give the container more memory (1 GB is recommended), then use "Retry failed audio".`));
 			else reject(new TtsError(`${cmd} failed (${signal || 'exit ' + code}): ${stderr.trim().split('\n').pop() || 'no output'}`));
 		});
 		child.stdin.on('error', () => {}); // the close handler reports the failure
@@ -101,6 +108,10 @@ export class Tts {
 		this.audioDir = audioDir;
 		this.fetch = fetchImpl;
 		this.run = runImpl;
+		// Every synthesis waits for the one before it: one voice engine at a time,
+		// whatever asked for it (a mail check, a new voice, "Redo audio"…).
+		this.queue = Promise.resolve();
+		this.waiting = 0;
 	}
 
 	provider() {
@@ -138,7 +149,14 @@ export class Tts {
 	}
 
 	/** Writes <audioDir>/<name>.mp3 in the given voice and returns { file, bytes, sha256 }. */
-	async synthesize(name, text, voiceId = this.defaultVoiceId()) {
+	synthesize(name, text, voiceId = this.defaultVoiceId()) {
+		this.waiting++;
+		const job = this.queue.then(() => this.synthesizeNow(name, text, voiceId));
+		this.queue = job.catch(() => {}).finally(() => this.waiting--);
+		return job;
+	}
+
+	async synthesizeNow(name, text, voiceId) {
 		const blocked = this.notReady();
 		if (blocked) throw new TtsError(blocked);
 		await mkdir(this.audioDir, { recursive: true });
