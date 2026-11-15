@@ -28,7 +28,9 @@ Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entri
    *CT Templates → Download from URL* in the web interface.
 2. *Create CT* from it: **Unprivileged**, **Nesting on** (Options → Features),
    1 GB memory, 8 GB disk. Start it.
-3. Open `http://<container-address>:8787/` in a browser. The address is shown
+3. Open `http://<container-address>:8787/` in a browser. The start page
+   offers **Continue to Devotion** (read and listen in the browser) and the
+   **admin panel**. The address is shown
    on the container's console, above the login prompt; there is no need to
    log in on the console.
 4. The page asks you to choose an admin password, and then everything is set
@@ -135,6 +137,15 @@ or removed.
 
 The share is written with `smbclient`, so nothing has to be mounted in the
 container.
+
+### Reading in a browser
+
+The server's address opens a start page with two choices: **Continue to
+Devotion** (`/read`), which shows the Daily readings and Lessons tabs, each
+entry's summary and text, and plays its audio in any voice the server has at
+the speed you choose; and **Sign in to the admin panel** (`/admin`). The
+reader needs no sign-in, like the app. Highlights, notes and the Bible are
+in the Android app only.
 
 ### Wallpapers
 

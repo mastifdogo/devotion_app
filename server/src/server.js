@@ -9,7 +9,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { TOPICS } from './wallpapers.js';
 
-const ADMIN_HTML = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'admin.html'));
+const page = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), name));
+const ADMIN_HTML = page('admin.html');
+const START_HTML = page('start.html');
+const READ_HTML = page('read.html');
+const PAGE_CSP = "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'";
 const SESSION_MS = 12 * 60 * 60 * 1000;
 
 class HttpError extends Error {
@@ -325,7 +329,9 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	});
 
 	// --- Admin ------------------------------------------------------------------
-	route('GET', /^\/$/, (req, res) => send(res, 302, '', { location: '/admin' }));
+	// The start page: read and listen, or sign in to the admin panel.
+	route('GET', /^\/$/, (req, res) => send(res, 200, START_HTML, { 'content-security-policy': PAGE_CSP }));
+	route('GET', /^\/read\/?$/, (req, res) => send(res, 200, READ_HTML, { 'content-security-policy': PAGE_CSP }));
 	route('GET', /^\/admin\/?$/, (req, res) => send(res, 200, ADMIN_HTML, { 'content-security-policy': "default-src 'self'; img-src 'self' https://th.wallhaven.cc; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" }));
 
 	// Tells the page which form to show before anyone is logged in.

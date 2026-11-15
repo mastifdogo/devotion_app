@@ -164,6 +164,14 @@ test('first visit sets the password; afterwards only that password logs in', asy
 	const res = await call('/admin/api/run', { method: 'POST' });
 	assert.equal(res.status, 415);
 	assert.equal((await call('/admin')).status, 200);
+	// The start page offers both ways in; the reader is a page of its own.
+	const start = await call('/');
+	assert.equal(start.status, 200);
+	const startHtml = await start.text();
+	assert.match(startHtml, /href="\/read"[^>]*>Continue to Devotion/);
+	assert.match(startHtml, /href="\/admin"[^>]*>Sign in to the admin panel/);
+	assert.match(start.headers.get('content-security-policy'), /default-src 'self'/);
+	assert.match(await (await call('/read')).text(), /<title>Devotion<\/title>/);
 });
 
 test('settings: secrets are write-only and an empty secret keeps the saved one', async (t) => {
