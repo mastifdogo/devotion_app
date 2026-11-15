@@ -34,6 +34,17 @@ export function classifySubject(subject) {
 	return null;
 }
 
+/**
+ * The passage a daily reading prints on the line under its dated heading
+ * ("October 23, 2026 – Exhort one another daily" then "Heb. 3:7-13"), or null.
+ */
+export function readingPassage(text) {
+	const m = new RegExp(`${DATE}\\s*${DASH}[^\\n]*\\n\\s*([^\\n]{3,60})`, 'i').exec(String(text || ''));
+	const line = m?.[4]?.trim();
+	// A reference: an optional 1–3, a book name (maybe abbreviated), a chapter, maybe verses.
+	return line && /^(?:[1-3]\s*)?[A-Za-z][A-Za-z.' ]{1,25}\s\d{1,3}(?::\d{1,3}(?:\s*[-\u2013]\s*\d{1,3})?)?(?:\s*[;,]\s*[\w.: \u2013-]+)?$/.test(line) ? line : null;
+}
+
 /** The date printed after "Lesson N" in a lesson's text, or null. */
 export function lessonDate(text, number) {
 	// "Lesson 11" then, close after it (next line, or the same one), the date.
@@ -74,6 +85,7 @@ export function applySubject(entries, message) {
 		out.entry_date = lessonDate(message.text, known.lesson_number) || entry.entry_date;
 	} else {
 		out.entry_date = known.entry_date;
+		out.scripture = readingPassage(message.text) || entry.scripture;
 		// The reading names its week's lesson in its heading ("Lesson 11 – …").
 		const lesson = new RegExp(`(?:^|\\n)\\s*Lesson\\s+(\\d{1,4})\\s*${DASH}`, 'i').exec(String(message.text || ''));
 		out.lesson_number = lesson ? Number(lesson[1]) : entry.lesson_number ?? null;

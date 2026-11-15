@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applySubject, classifySubject, isoDate, lessonDate } from '../src/classify.js';
+import { applySubject, classifySubject, isoDate, lessonDate, readingPassage } from '../src/classify.js';
 
 // The openings of real emails, as the server's HTML-to-text step gives them.
 const LESSON_8 = 'COGICM Daily Bible Readings\n\nPreschool: Be kindly affectioned one to another (Romans 12:10).\n\nDon’t Look Back\n\nLesson 8\n\nOctober 25, 2026\n\nBackground Scripture: Genesis 19\n\nLesson Scripture: Genesis 19:17-29; Luke 9:62';
@@ -44,4 +44,24 @@ test('the email overrides the model, and a split lesson is joined again', () => 
 	// An email the subject says nothing about keeps what the model said.
 	assert.deepEqual(applySubject(model, { subject: 'Weekly digest', text: '' }), model);
 	assert.deepEqual(applySubject([], { subject: 'Lesson 8 – x', text: '' }), []);
+});
+
+// Four more daily readings: the subject, and the text's opening.
+const READINGS = [
+	['October 23, 2026 – Exhort one another daily', 'COGICM Daily Bible Readings\n\nLesson 8 – Don’t Look Back\nToday’s Quote: “Success is determined not by whether or not you face obstacles…” ― Ben Carson\nOctober 23, 2026 – Exhort one another daily\nHeb. 3:7-13\n\nKJV\n7 Wherefore (as the Holy Ghost saith…', ['2026-10-23', 8, 'Exhort one another daily', 'Heb. 3:7-13']],
+	['October 24, 2026 – The lukewarm state', 'COGICM Daily Bible Readings\n\nLesson 8 – Don’t Look Back\nToday’s Quote: “....thoughts—just mere thoughts—are as powerful as electric batteries…” ― Frances Hodgson Burnett\nOctober 24, 2026 – The lukewarm state\nRev. 3:14-19\n\nKJV\n14 And unto the angel…', ['2026-10-24', 8, 'The lukewarm state', 'Rev. 3:14-19']],
+	['October 25, 2026 – Jesus’s prayer for us', 'COGICM Daily Bible Readings\n\nLesson 8 – Don’t Look Back\nToday’s Quote: “I am still determined to be cheerful and happy…” ― Martha Washington\nOctober 25, 2026 – Jesus’s prayer for us\nJohn 17:11-19\n\nKJV\n11 And now I am no more in the world…', ['2026-10-25', 8, 'Jesus’s prayer for us', 'John 17:11-19']],
+	['October 26, 2026 – God’s plan for mankind', 'COGICM Daily Bible Readings\n\nLesson 9 – God Provides a Wife for Isaac\nToday’s Quote: “Christianity says that God loves man…” ― C.S. Lewis\nOctober 26, 2026 – God’s plan for mankind\nGen. 2:18-24\n\nKJV\n18 And the LORD God said…', ['2026-10-26', 9, 'God’s plan for mankind', 'Gen. 2:18-24']],
+	['November 15, 2026 – The struggle is spiritual', READING + '\n\nKJV\n4 (For the weapons…', ['2026-11-15', 11, 'The struggle is spiritual', '2 Cor. 10:4-6']],
+];
+
+test('daily readings: the day, the week\'s lesson and the printed passage', () => {
+	const model = { kind: 'lesson', lesson_number: 3, title: 'x', entry_date: '2026-01-01', scripture: 'Hebrews 3', summary: 'S.', body: 'B', references: [] };
+	for (const [subject, text, expected] of READINGS) {
+		const [e] = applySubject([model], { subject, text });
+		assert.deepEqual([e.entry_date, e.lesson_number, e.title, e.scripture, e.kind], [...expected, 'daily_reading'], subject);
+	}
+	assert.equal(readingPassage('November 15, 2026 – A title\nToday we think about many things at length.'), null);
+	assert.equal(readingPassage('November 15, 2026 – A title\n1 Samuel 17'), '1 Samuel 17');
+	assert.equal(readingPassage('November 15, 2026 – A title\nPsalm 23; John 1:1-5'), 'Psalm 23; John 1:1-5');
 });
