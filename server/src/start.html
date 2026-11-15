@@ -5,16 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Devotion</title>
 <script>
-try { const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch {}
+try {
+	const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+	// The wallpaper chosen in the reader, behind this page too.
+	const w = localStorage.getItem('read.wallpaper'); if (w && /^[A-Za-z0-9]{1,16}$/.test(w)) document.documentElement.dataset.wallpaper = w;
+	const o = Number(localStorage.getItem('read.opacity')); if (o >= 50 && o <= 100) document.documentElement.style.setProperty('--win', o / 100);
+} catch {}
 </script>
 <style>
-:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; }
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --win:1; }
 :root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; } }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, sans-serif; display:grid; place-items:center; padding:1rem; }
 main { width:100%; max-width:24rem; text-align:center; }
+html { background:var(--bg); }
+body { background:var(--bg) center / cover no-repeat fixed; }
+:root[data-wallpaper] main { max-width:26rem; padding:2rem 1.5rem 1.25rem; border-radius:18px; border:1px solid var(--line); background:color-mix(in srgb, var(--card) calc(var(--win) * 100%), transparent); box-shadow:0 8px 32px rgba(0,0,0,.18); -webkit-backdrop-filter:blur(calc((1 - var(--win)) * 24px)); backdrop-filter:blur(calc((1 - var(--win)) * 24px)); }
 .mark { width:64px; height:64px; margin:0 auto 1rem; border-radius:50%; background:var(--accent); display:grid; place-items:center; }
 .mark svg { width:34px; height:34px; }
 h1 { font-size:1.6rem; margin:0 0 .3rem; letter-spacing:.01em; }
@@ -37,6 +45,7 @@ a.choice:focus-visible { outline:3px solid var(--ink); outline-offset:2px; }
 	<a class="choice secondary" href="/admin" id="admin">Sign in to the admin panel<small>Settings, Gmail, voices, wallpapers</small></a>
 </main>
 <script>
+if (document.documentElement.dataset.wallpaper) document.body.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(document.documentElement.dataset.wallpaper)}")`;
 // A new server has no admin password yet: say that the admin panel sets one up.
 fetch('/admin/api/session').then((r) => r.json()).then((s) => {
 	if (s.needs_setup) document.getElementById('admin').firstChild.textContent = 'Set up the admin panel';

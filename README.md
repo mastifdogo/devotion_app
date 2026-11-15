@@ -147,6 +147,12 @@ the speed you choose; and **Sign in to the admin panel** (`/admin`). The
 reader needs no sign-in, like the app. Highlights, notes and the Bible are
 in the Android app only.
 
+On a desktop the reader shows the list on the left and the open reading on
+the right; on a phone, one at a time. **Wallpaper** in its top bar picks one
+of the server's wallpapers as the background, with the text on a window
+over it (the wallpaper shows around the edges) and a **Text window
+opacity** slider; the choice is remembered by that browser.
+
 ### Wallpapers
 
 Under **Wallpapers**, pick a topic (Nature, Mountains, Ocean, … or your own
