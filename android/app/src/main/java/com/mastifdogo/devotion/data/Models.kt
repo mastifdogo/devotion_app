@@ -39,6 +39,10 @@ data class Entry(
      * See [com.mastifdogo.devotion.logic.AudioLogic.variants].
      */
     val audio: List<AudioVariant>? = null,
+    /** "daily_reading", "lesson" or "devotion"; see [com.mastifdogo.devotion.logic.EntryKinds.kindOf]. */
+    val kind: String = "devotion",
+    /** A lesson's number, or for a daily reading the lesson that week's reading belongs to. */
+    @SerialName("lesson_number") val lessonNumber: Int? = null,
 ) {
     /** "yyyy-MM-dd"-like key used for ordering: entry_date, falling back to created_at. */
     val sortKey: String
