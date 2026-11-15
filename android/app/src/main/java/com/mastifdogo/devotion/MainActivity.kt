@@ -9,8 +9,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.mastifdogo.devotion.ui.BibleScreen
 import com.mastifdogo.devotion.ui.DetailScreen
 import com.mastifdogo.devotion.ui.DevotionTheme
 import com.mastifdogo.devotion.ui.ListScreen
@@ -47,18 +47,20 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun DevotionApp(vm: MainViewModel) {
     val screen = vm.screen
-    BackHandler(enabled = screen != Screen.EntryList) { vm.back() }
+    // Inside the app Back walks back (Detail/Settings -> tabs, Bible chapter -> books -> versions);
+    // at the root it is not handled, so the system closes the app.
+    BackHandler(enabled = vm.canGoBack) { vm.back() }
     when (screen) {
         is Screen.EntryList -> ListScreen(vm)
         is Screen.Settings -> SettingsScreen(vm)
-        is Screen.Bible -> BibleScreen(vm)
         is Screen.Detail -> {
             val entry = vm.entryById(screen.id)
             if (entry == null) {
                 // The entry was deleted on the server while it was open.
                 ListScreen(vm)
             } else {
-                DetailScreen(vm, entry)
+                // A fresh scroll position and dialog state for each entry.
+                key(entry.id) { DetailScreen(vm, entry) }
             }
         }
     }

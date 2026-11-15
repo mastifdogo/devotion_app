@@ -3,7 +3,6 @@ package com.mastifdogo.devotion.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +22,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,28 +42,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.data.Entry
-import com.mastifdogo.devotion.logic.Paragraph
+import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.Passage
 import com.mastifdogo.devotion.logic.TextLogic
+import java.time.ZoneId
+import java.util.Locale
 
-/** The passage whose highlight/comment dialog is open, and the annotation already on it (if any). */
+/** The range whose highlight/comment dialog is open, and the annotation already on it (if any). */
 private class EditTarget(val passage: Passage, val existing: Annotation?)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,21 +123,32 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
                     )
                 }
             } else {
-                EntryBody(
-                    vm = vm,
-                    entry = entry,
+                val references = entry.references
+                val links = remember(references, entry.body) {
+                    TextLogic.usableLinks(references.map { Passage(it.start, it.end) }, entry.body.length)
+                }
+                EntryBodyText(
+                    body = entry.body,
                     annotations = annotations,
+                    links = links,
                     dark = dark,
-                    onPassage = { passage ->
+                    onHighlight = { start, end -> vm.highlightRange(entry.id, start, end) },
+                    onComment = { start, end ->
                         if (vm.profile == null) {
                             vm.openProfilePrompt()
                         } else {
-                            editing = EditTarget(
-                                passage,
-                                TextLogic.findOverlapping(annotations, entry.id, passage.start, passage.end),
-                            )
+                            editing = EditTarget(Passage(start, end), null)
                         }
                     },
+                    onOpenAnnotation = { annotation -> editing = EditTarget(Passage(annotation.start, annotation.end), annotation) },
+                    onOpenLink = { index -> references.getOrNull(index)?.let { vm.openBibleReference(it) } },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Press and hold to select text, then choose Highlight or Comment.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -160,14 +167,24 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
 
     val target = editing
     if (target != null) {
+        val existing = target.existing
         AnnotationDialog(
             body = entry.body,
             target = target,
+            initialColor = vm.lastHighlightColor,
             dark = dark,
             onDismiss = { editing = null },
             onSave = { color, comment ->
-                vm.saveAnnotation(entry.id, target.passage.start, target.passage.end, target.existing, color, comment)
+                vm.saveAnnotation(entry.id, target.passage.start, target.passage.end, existing, color, comment)
                 editing = null
+            },
+            onDelete = if (existing != null) {
+                {
+                    vm.deleteAnnotation(existing)
+                    editing = null
+                }
+            } else {
+                null
             },
         )
     }
@@ -179,11 +196,12 @@ private fun Header(vm: MainViewModel, entry: Entry) {
         text = entry.title.ifBlank { "(untitled)" },
         style = MaterialTheme.typography.headlineSmall,
     )
-    val date = entryDateLabel(entry)
-    if (date.isNotEmpty()) {
+    // Daily reading: the full date; lesson: "Lesson 11 · date"; anything else: the date.
+    val label = EntryKinds.heading(entry, Locale.getDefault(), ZoneId.systemDefault()) ?: entryDateLabel(entry)
+    if (label.isNotEmpty()) {
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = date,
+            text = label,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -195,6 +213,15 @@ private fun Header(vm: MainViewModel, entry: Entry) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline,
         )
+    }
+    val lessonNumber = entry.lessonNumber
+    if (lessonNumber != null && EntryKinds.kindOf(entry) == EntryKinds.DAILY_READING) {
+        val lesson = EntryKinds.newestLesson(vm.entries, lessonNumber)
+        if (lesson != null && lesson.id != entry.id) {
+            TextButton(onClick = { vm.openLesson(lessonNumber) }) {
+                Text("Open ${EntryKinds.lessonLabel(lessonNumber)}")
+            }
+        }
     }
     val scripture = entry.scripture
     if (!scripture.isNullOrBlank()) {
@@ -210,173 +237,27 @@ private fun Header(vm: MainViewModel, entry: Entry) {
     }
 }
 
-// ---- body with highlights and links -------------------------------------------------------------
-
-/** One stretch of the displayed paragraph text and what a tap on it means. */
-private class DisplaySegment(val start: Int, val end: Int, val sentence: Int, val link: Int)
-
-private class BuiltParagraph(val text: AnnotatedString, val segments: List<DisplaySegment>)
-
-private const val COMMENT_MARKER = " 💬"
-
-private fun buildParagraph(
-    body: String,
-    paragraph: Paragraph,
-    annotations: List<Annotation>,
-    entryId: Long,
-    links: List<Passage?>,
-    dark: Boolean,
-    linkColor: Color,
-): BuiltParagraph {
-    val spans = TextLogic.styledSpans(paragraph, links)
-    val perSentence = paragraph.sentences.map {
-        TextLogic.findOverlapping(annotations, entryId, it.start, it.end)
-    }
-    val builder = AnnotatedString.Builder()
-    val segments = ArrayList<DisplaySegment>()
-    for ((index, span) in spans.withIndex()) {
-        val from = builder.length
-        builder.append(body.substring(span.start, span.end))
-        val to = builder.length
-        val annotation = if (span.sentence >= 0) perSentence[span.sentence] else null
-        val background = highlightColor(annotation?.color, dark)
-        if (background != null) builder.addStyle(SpanStyle(background = background), from, to)
-        if (span.link >= 0) {
-            builder.addStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), from, to)
-        }
-        segments.add(DisplaySegment(from, to, span.sentence, span.link))
-
-        // A small marker after the last piece of a sentence that carries a comment.
-        val lastOfSentence = span.sentence >= 0 &&
-            (index == spans.size - 1 || spans[index + 1].sentence != span.sentence)
-        if (lastOfSentence && annotation != null && annotation.comment.isNotBlank()) {
-            val markerFrom = builder.length
-            builder.append(COMMENT_MARKER)
-            segments.add(DisplaySegment(markerFrom, builder.length, span.sentence, -1))
-        }
-    }
-    return BuiltParagraph(builder.toAnnotatedString(), segments)
-}
-
-@Composable
-private fun EntryBody(
-    vm: MainViewModel,
-    entry: Entry,
-    annotations: List<Annotation>,
-    dark: Boolean,
-    onPassage: (Passage) -> Unit,
-) {
-    val body = entry.body
-    val paragraphs = remember(body) { TextLogic.paragraphs(body) }
-    val references = entry.references
-    val links = remember(references, body) {
-        TextLogic.usableLinks(references.map { Passage(it.start, it.end) }, body.length)
-    }
-    for ((index, paragraph) in paragraphs.withIndex()) {
-        if (index > 0) Spacer(modifier = Modifier.height(12.dp))
-        ParagraphText(
-            body = body,
-            paragraph = paragraph,
-            annotations = annotations,
-            entryId = entry.id,
-            links = links,
-            dark = dark,
-            onSentence = onPassage,
-            onLink = { linkIndex ->
-                val reference = references.getOrNull(linkIndex)
-                if (reference != null) vm.openBibleReference(reference)
-            },
-        )
-    }
-}
-
-@Composable
-private fun ParagraphText(
-    body: String,
-    paragraph: Paragraph,
-    annotations: List<Annotation>,
-    entryId: Long,
-    links: List<Passage?>,
-    dark: Boolean,
-    onSentence: (Passage) -> Unit,
-    onLink: (Int) -> Unit,
-) {
-    val linkColor = MaterialTheme.colorScheme.primary
-    val built = remember(body, paragraph, annotations, links, dark, linkColor) {
-        buildParagraph(body, paragraph, annotations, entryId, links, dark, linkColor)
-    }
-    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val currentOnSentence by rememberUpdatedState(onSentence)
-    val currentOnLink by rememberUpdatedState(onLink)
-
-    Text(
-        text = built.text,
-        style = MaterialTheme.typography.bodyLarge,
-        onTextLayout = { layout = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .pointerInput(built) {
-                detectTapGestures(
-                    onTap = { position ->
-                        val result = layout
-                        if (result != null) {
-                            val offset = result.getOffsetForPosition(position)
-                            val segment = segmentAt(built.segments, offset)
-                            if (segment != null) {
-                                if (segment.link >= 0) {
-                                    currentOnLink(segment.link)
-                                } else {
-                                    val sentence = paragraph.sentences.getOrNull(segment.sentence)
-                                    if (sentence != null) currentOnSentence(sentence)
-                                }
-                            }
-                        }
-                    },
-                )
-            },
-    )
-}
-
-/**
- * The segment a tap at display [offset] belongs to. A tap on the whitespace between two
- * sentences (or past the end of the text) counts for the sentence before it.
- */
-private fun segmentAt(segments: List<DisplaySegment>, offset: Int): DisplaySegment? {
-    if (segments.isEmpty()) return null
-    var index = segments.indexOfFirst { offset >= it.start && offset < it.end }
-    if (index < 0) index = segments.size - 1
-    val hit = segments[index]
-    if (hit.link >= 0 || hit.sentence >= 0) return hit
-    for (i in index - 1 downTo 0) if (segments[i].sentence >= 0) return DisplaySegment(0, 0, segments[i].sentence, -1)
-    for (i in index + 1 until segments.size) if (segments[i].sentence >= 0) return DisplaySegment(0, 0, segments[i].sentence, -1)
-    return null
-}
-
 // ---- highlight / comment dialog -----------------------------------------------------------------
 
 @Composable
 private fun AnnotationDialog(
     body: String,
     target: EditTarget,
+    initialColor: String,
     dark: Boolean,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit,
+    onDelete: (() -> Unit)?,
 ) {
     val existing = target.existing
-    var color by remember(target) { mutableStateOf(existing?.color ?: TextLogic.HIGHLIGHT_COLORS.first()) }
+    var color by remember(target) { mutableStateOf(existing?.color ?: initialColor) }
     var comment by remember(target) { mutableStateOf(existing?.comment ?: "") }
-    val quoted = if (existing != null) {
-        TextLogic.quote(body, existing)
-    } else {
-        body.substring(
-            target.passage.start.coerceIn(0, body.length),
-            target.passage.end.coerceIn(target.passage.start.coerceIn(0, body.length), body.length),
-        )
-    }
+    val start = target.passage.start.coerceIn(0, body.length)
+    val quoted = body.substring(start, target.passage.end.coerceIn(start, body.length))
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing != null) "Edit highlight" else "Highlight") },
+        title = { Text(if (existing != null) "Edit highlight" else "Comment") },
         text = {
             Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 Text(
@@ -431,6 +312,12 @@ private fun AnnotationDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                if (onDelete != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onDelete) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         },
@@ -531,49 +418,93 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry) {
                 )
             }
 
-            val cached = entry.id in vm.cachedAudio
-            val downloading = vm.downloads.containsKey(entry.id)
-            val loaded = vm.playerEntryId == entry.id
-
-            when {
-                !entry.hasAudio && !cached -> {
-                    Text(
-                        text = if (entry.archived) {
-                            "Archived on the server — the audio is no longer available."
-                        } else {
-                            "No audio for this entry yet."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-                }
-
-                downloading -> {
-                    val fraction = vm.downloads[entry.id]
-                    Text(
-                        text = if (fraction != null) {
-                            "Downloading audio… ${(fraction * 100f).toInt()}%"
-                        } else {
-                            "Downloading audio…"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    if (fraction != null) {
-                        LinearProgressIndicator(
-                            progress = { fraction },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+            val voice = vm.voiceFor(entry)
+            if (voice == null) {
+                Text(
+                    text = if (entry.archived) {
+                        "Archived on the server — the audio is no longer available."
                     } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
+                        "No audio for this entry yet."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+                return@Column
+            }
 
-                else -> {
-                    PlayerControls(vm = vm, entry = entry, loaded = loaded, cached = cached)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                VoiceChooser(vm, entry, voice)
+                // Playback speed: each tap steps to the next speed.
+                OutlinedButton(onClick = { vm.cyclePlaybackSpeed() }) {
+                    Text(MainViewModel.speedLabel(vm.playbackSpeed))
                 }
+            }
+
+            if (vm.isAudioDownloading(entry)) {
+                val fraction = vm.audioDownloadFraction(entry)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (fraction != null) {
+                        "Downloading audio… ${(fraction * 100f).toInt()}%"
+                    } else {
+                        "Downloading audio…"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (fraction != null) {
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            } else {
+                val loaded = vm.playerEntryId == entry.id && vm.playerVoice == voice
+                PlayerControls(vm = vm, entry = entry, loaded = loaded, cached = vm.isAudioCached(entry))
+            }
+        }
+    }
+}
+
+/** The entry's current voice; a menu to switch when the entry has audio in more than one voice. */
+@Composable
+private fun VoiceChooser(vm: MainViewModel, entry: Entry, voice: String) {
+    val variants = vm.entryVoices(entry)
+    if (variants.size <= 1) {
+        if (voice.isNotEmpty()) {
+            Text(
+                text = vm.voiceLabel(voice),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Spacer(modifier = Modifier.size(1.dp))
+        }
+        return
+    }
+    var expanded by remember(entry.id) { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Text("Voice: ${vm.voiceLabel(voice)} ▾")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            for (variant in variants) {
+                val name = vm.voiceLabel(variant.voice)
+                DropdownMenuItem(
+                    text = { Text(if (variant.voice == voice) "$name ✓" else name) },
+                    onClick = {
+                        expanded = false
+                        vm.chooseVoice(entry, variant.voice)
+                    },
+                )
             }
         }
     }
@@ -629,9 +560,5 @@ private fun PlayerControls(vm: MainViewModel, entry: Entry, loaded: Boolean, cac
             )
         }
         TextButton(onClick = { vm.skip(15_000L) }, enabled = canSeek) { Text("+15 s") }
-        // Playback speed: each tap steps to the next speed.
-        OutlinedButton(onClick = { vm.cyclePlaybackSpeed() }) {
-            Text(MainViewModel.speedLabel(vm.playbackSpeed))
-        }
     }
 }

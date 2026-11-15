@@ -9,11 +9,11 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 
-/** The tabs of the entry list; [key] is what is stored in SharedPreferences. */
+/** The tabs of the main screen; [key] is what is stored in SharedPreferences. */
 enum class EntryTab(val key: String, val label: String) {
     DAILY("daily", "Daily readings"),
     LESSONS("lessons", "Lessons"),
-    OTHER("other", "Other");
+    BIBLE("bible", "Bible");
 
     companion object {
         fun fromKey(key: String?): EntryTab = entries.firstOrNull { it.key == key } ?: DAILY
@@ -33,29 +33,13 @@ object EntryKinds {
         else -> DEVOTION
     }
 
-    fun tabFor(entry: Entry): EntryTab = when (kindOf(entry)) {
-        DAILY_READING -> EntryTab.DAILY
-        LESSON -> EntryTab.LESSONS
-        else -> EntryTab.OTHER
-    }
+    /** Lessons go to the Lessons tab; daily readings and everything else (devotions) to Daily readings. */
+    fun tabFor(entry: Entry): EntryTab =
+        if (kindOf(entry) == LESSON) EntryTab.LESSONS else EntryTab.DAILY
 
-    /** Daily readings and Lessons always; Other only when there is at least one devotion. */
-    fun tabs(entries: List<Entry>): List<EntryTab> =
-        if (entries.any { tabFor(it) == EntryTab.OTHER }) {
-            listOf(EntryTab.DAILY, EntryTab.LESSONS, EntryTab.OTHER)
-        } else {
-            listOf(EntryTab.DAILY, EntryTab.LESSONS)
-        }
-
-    /** The remembered tab if it is shown, else the first tab. */
-    fun visibleTab(remembered: EntryTab, entries: List<Entry>): EntryTab {
-        val shown = tabs(entries)
-        return if (remembered in shown) remembered else shown.first()
-    }
-
-    /** The entries of one tab, newest first (entry_date, falling back to created_at). */
+    /** The entries of one tab, newest first (entry_date, falling back to created_at); none for Bible. */
     fun entriesFor(tab: EntryTab, entries: List<Entry>): List<Entry> =
-        entries.filter { tabFor(it) == tab }.sortedNewestFirst()
+        if (tab == EntryTab.BIBLE) emptyList() else entries.filter { tabFor(it) == tab }.sortedNewestFirst()
 
     /** The day an entry is for: its entry_date, else the local day of created_at; null if neither parses. */
     fun entryDay(entry: Entry, zone: ZoneId): LocalDate? {
@@ -86,8 +70,8 @@ object EntryKinds {
     fun lessonLabel(number: Int): String = "Lesson $number"
 
     /**
-     * The heading of a daily reading or lesson, or null for other entries (which keep their title
-     * as heading). Daily reading: the full date. Lesson: "Lesson 11 · November 15, 2026", just the
+     * The heading of a daily reading or lesson, or null for devotions (which keep their title as
+     * heading and show their date the old way). Daily reading: the full date. Lesson: "Lesson 11 · November 15, 2026", just the
      * number or just the date when the other is missing. Null as well when there is nothing to show.
      */
     fun heading(entry: Entry, locale: Locale, zone: ZoneId): String? {

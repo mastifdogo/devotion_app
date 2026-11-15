@@ -31,17 +31,15 @@ class EntryKindsTest {
     }
 
     @Test
-    fun tabs_otherOnlyWhenThereAreDevotions() {
-        val noOther = listOf(entry(1, "daily_reading"), entry(2, "lesson"))
-        assertEquals(listOf(EntryTab.DAILY, EntryTab.LESSONS), EntryKinds.tabs(noOther))
-        assertEquals(listOf(EntryTab.DAILY, EntryTab.LESSONS), EntryKinds.tabs(emptyList()))
-        val withOther = noOther + entry(3, "weird")
-        assertEquals(listOf(EntryTab.DAILY, EntryTab.LESSONS, EntryTab.OTHER), EntryKinds.tabs(withOther))
-        assertEquals(EntryTab.DAILY, EntryKinds.visibleTab(EntryTab.OTHER, noOther))
-        assertEquals(EntryTab.OTHER, EntryKinds.visibleTab(EntryTab.OTHER, withOther))
-        assertEquals(EntryTab.LESSONS, EntryKinds.visibleTab(EntryTab.LESSONS, noOther))
+    fun tabFor_devotionsAndUnknownGoToDailyReadings() {
+        assertEquals(EntryTab.DAILY, EntryKinds.tabFor(entry(1, "daily_reading")))
+        assertEquals(EntryTab.LESSONS, EntryKinds.tabFor(entry(1, "lesson")))
+        assertEquals(EntryTab.DAILY, EntryKinds.tabFor(entry(1, "devotion")))
+        assertEquals(EntryTab.DAILY, EntryKinds.tabFor(entry(1, "weird")))
         assertEquals(EntryTab.DAILY, EntryTab.fromKey("nonsense"))
+        assertEquals(EntryTab.DAILY, EntryTab.fromKey("other"))
         assertEquals(EntryTab.LESSONS, EntryTab.fromKey("lessons"))
+        assertEquals(EntryTab.BIBLE, EntryTab.fromKey("bible"))
     }
 
     @Test
@@ -54,9 +52,10 @@ class EntryKindsTest {
             entry(5, "lesson", date = "2026-11-15", lesson = 11),
             entry(6, "other"),
         )
-        assertEquals(listOf(2L, 1L, 3L), EntryKinds.entriesFor(EntryTab.DAILY, list).map { it.id })
+        // The devotion (id 6, created 2026-11-01) sorts in among the daily readings.
+        assertEquals(listOf(2L, 1L, 3L, 6L), EntryKinds.entriesFor(EntryTab.DAILY, list).map { it.id })
         assertEquals(listOf(5L, 4L), EntryKinds.entriesFor(EntryTab.LESSONS, list).map { it.id })
-        assertEquals(listOf(6L), EntryKinds.entriesFor(EntryTab.OTHER, list).map { it.id })
+        assertEquals(emptyList<Long>(), EntryKinds.entriesFor(EntryTab.BIBLE, list).map { it.id })
     }
 
     @Test

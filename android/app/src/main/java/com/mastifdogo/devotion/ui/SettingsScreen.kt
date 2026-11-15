@@ -80,6 +80,10 @@ fun SettingsScreen(vm: MainViewModel) {
             SectionDivider()
             PlaybackSection(vm)
             SectionDivider()
+            if (vm.voicesSupported) {
+                VoiceSection(vm)
+                SectionDivider()
+            }
             AppearanceSection(vm)
             SectionDivider()
             CacheSection(vm)
@@ -164,6 +168,59 @@ private fun ProfileSection(vm: MainViewModel) {
     }
 }
 
+/** The voice audio is played (and downloaded automatically) in; hidden for servers without voices. */
+@Composable
+private fun VoiceSection(vm: MainViewModel) {
+    SectionTitle("Voice")
+    val voices = vm.voices
+    if (voices.isEmpty()) {
+        Text(
+            text = "The server has no voices yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    val selectedVoice = vm.selectedSettingsVoice
+    for (voice in voices) {
+        val selected = voice.id == selectedVoice
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectable(
+                    selected = selected,
+                    role = Role.RadioButton,
+                    onClick = { vm.updatePreferredVoice(voice.id) },
+                )
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = null)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                val name = voice.name.ifBlank { voice.id }
+                Text(
+                    text = if (voice.id == vm.serverDefaultVoice) "$name (server default)" else name,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                val description = voice.description
+                if (!description.isNullOrBlank()) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+    Text(
+        text = "Entries that do not have this voice play in the server's default voice.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @Composable
 private fun PlaybackSection(vm: MainViewModel) {
     SectionTitle("Playback speed")
@@ -221,7 +278,7 @@ private fun CacheSection(vm: MainViewModel) {
         Column(modifier = Modifier.weight(1f)) {
             Text("Download audio automatically", style = MaterialTheme.typography.bodyLarge)
             Text(
-                text = "After each sync, save all narrations on this device.",
+                text = "After each sync, save each entry's narration in your voice on this device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

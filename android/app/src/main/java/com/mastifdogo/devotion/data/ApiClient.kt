@@ -44,12 +44,30 @@ class ApiClient {
     }
 
     /**
-     * GET /api/entries/{id}/audio into [dest]. Returns the lowercase hex SHA-256 of the bytes written.
+     * GET /api/entries/{id}/audio[?voice=...] into [dest]; voice "" means the server default.
+     * Returns the lowercase hex SHA-256 of the bytes written.
      * [onProgress] receives (bytesRead, totalBytes or -1 when unknown); it may throw to abort.
      */
-    fun downloadAudio(baseUrl: String, id: Long, dest: File, onProgress: (Long, Long) -> Unit): String {
-        val url = apiUrl(baseUrl).addPathSegments("api/entries/$id/audio").build()
-        return downloadTo(url, dest, "Downloading audio", "The server has no audio for this entry.", onProgress)
+    fun downloadAudio(baseUrl: String, id: Long, voice: String, dest: File, onProgress: (Long, Long) -> Unit): String {
+        val builder = apiUrl(baseUrl).addPathSegments("api/entries/$id/audio")
+        if (voice.isNotEmpty()) builder.addQueryParameter("voice", voice)
+        return downloadTo(
+            builder.build(),
+            dest,
+            "Downloading audio",
+            "The server has no audio for this entry in this voice.",
+            onProgress,
+        )
+    }
+
+    /** GET /api/voices; null when the server is too old to offer a choice of voice (404). */
+    fun voices(baseUrl: String): VoicesResponse? {
+        val url = apiUrl(baseUrl).addPathSegments("api/voices").build()
+        return try {
+            getJson(url, "Loading voices") { AppJson.decodeFromString(VoicesResponse.serializer(), it) }
+        } catch (e: ApiException) {
+            if (e.httpCode == 404) null else throw e
+        }
     }
 
     // ---- profiles ---------------------------------------------------------------------------
