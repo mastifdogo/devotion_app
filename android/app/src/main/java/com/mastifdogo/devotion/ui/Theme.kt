@@ -9,6 +9,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -18,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.logic.WindowLogic
@@ -114,7 +114,7 @@ fun windowCardColor(): Color = MaterialTheme.colorScheme.surfaceContainer
 
 /**
  * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),
- * inset from the sides and bottom (more, and at most 720dp wide, on screens from 600dp), so the
+ * inset from the sides and bottom (more, and at most 720dp wide, when 600dp or wider), so the
  * wallpaper frames it. Without one: just the content, as before wallpapers existed.
  * [modifier] should carry the Scaffold padding (which already includes the system bar insets).
  */
@@ -129,22 +129,25 @@ fun ContentWindow(
         Box(modifier = modifier.fillMaxSize()) { content() }
         return
     }
-    val layout = WindowLogic.layoutFor(LocalConfiguration.current.screenWidthDp)
-    val inset = layout.insetDp.dp
-    val maxWidth = layout.maxWidthDp
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(start = inset, end = inset, bottom = inset),
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = WindowLogic.clampOpacity(opacity)),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            shape = RoundedCornerShape(16.dp),
-            modifier = (if (maxWidth != null) Modifier.widthIn(max = maxWidth.dp) else Modifier).fillMaxSize(),
+    // The width available to the screen decides the inset and the width cap.
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val layout = WindowLogic.layoutFor(maxWidth.value.toInt())
+        val inset = layout.insetDp.dp
+        val cap = layout.maxWidthDp
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = inset, end = inset, bottom = inset),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            content()
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = WindowLogic.clampOpacity(opacity)),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = (if (cap != null) Modifier.widthIn(max = cap.dp) else Modifier).fillMaxSize(),
+            ) {
+                content()
+            }
         }
     }
 }

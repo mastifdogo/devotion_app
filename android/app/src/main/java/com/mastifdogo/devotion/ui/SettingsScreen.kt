@@ -83,32 +83,32 @@ fun SettingsScreen(vm: MainViewModel) {
         },
     ) { padding ->
         ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-        ) {
-            ServerSection(vm)
-            SectionDivider()
-            ProfileSection(vm)
-            SectionDivider()
-            PlaybackSection(vm)
-            SectionDivider()
-            if (vm.voicesSupported) {
-                VoiceSection(vm)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                ServerSection(vm)
                 SectionDivider()
+                ProfileSection(vm)
+                SectionDivider()
+                PlaybackSection(vm)
+                SectionDivider()
+                if (vm.voicesSupported) {
+                    VoiceSection(vm)
+                    SectionDivider()
+                }
+                AppearanceSection(vm)
+                SectionDivider()
+                WallpaperSection(vm)
+                SectionDivider()
+                CacheSection(vm)
+                SectionDivider()
+                UpdateSection(vm)
+                Spacer(modifier = Modifier.height(24.dp))
             }
-            AppearanceSection(vm)
-            SectionDivider()
-            WallpaperSection(vm)
-            SectionDivider()
-            CacheSection(vm)
-            SectionDivider()
-            UpdateSection(vm)
-            Spacer(modifier = Modifier.height(24.dp))
-        }
         }
     }
 }
