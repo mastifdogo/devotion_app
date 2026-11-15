@@ -210,7 +210,8 @@ const act = (fn) => async (ev) => { ev?.preventDefault?.(); try { await fn(ev); 
 
 function showLogin() { $('login').hidden = false; $('setup').hidden = true; $('app').hidden = true; $('logout').hidden = true; clearInterval(poll); }
 function showSetup() { $('setup').hidden = false; $('login').hidden = true; $('app').hidden = true; $('logout').hidden = true; }
-function startPolling() { clearInterval(poll); poll = setInterval(() => load(false).catch(() => {}), 8000); }
+let pauseRefresh = false;
+function startPolling() { clearInterval(poll); poll = setInterval(() => { if (!pauseRefresh) load(false).catch(() => {}); }, 8000); }
 const when = (iso) => iso ? new Date(iso).toLocaleString() : 'never';
 
 function fillForm() {
@@ -222,7 +223,28 @@ function fillForm() {
 }
 function showEngine() { for (const d of document.querySelectorAll('[data-for]')) d.hidden = d.dataset.for !== $('tts_provider').value; }
 
+// Correcting an entry's tab, lesson number, date or title in place.
+function editLabel(tr, e) {
+	const form = el('td'); form.colSpan = 4;
+	const field = (label, input) => { const l = el('label', label); l.append(input); return l; };
+	const kind = el('select'); for (const [v, t] of [['daily_reading', 'Daily reading'], ['lesson', 'Lesson']]) { const o = el('option', t); o.value = v; kind.append(o); } kind.value = e.kind;
+	const number = el('input'); number.inputMode = 'numeric'; number.value = e.lesson_number ?? ''; number.style.maxWidth = '6rem';
+	const date = el('input'); date.type = 'date'; date.value = e.entry_date || '';
+	const title = el('input'); title.value = e.title;
+	const grid = el('div', null, 'grid'); grid.append(field('Tab', kind), field('Lesson number', number), field('Date', date), field('Title', title));
+	const save = el('button', 'Save'); const cancel = el('button', 'Cancel', 'plain');
+	const auto = el('button', 'Sort automatically', 'plain'); auto.hidden = !e.label_manual;
+	save.onclick = act(async () => { state = await api(`/admin/api/entries/${e.id}/label`, { kind: kind.value, lesson_number: number.value.trim() || null, entry_date: date.value || null, title: title.value }); render(); toast('Saved. The app shows it on its next refresh.'); });
+	auto.onclick = act(async () => { state = await api(`/admin/api/entries/${e.id}/label`, { auto: true }); render(); });
+	cancel.onclick = () => render();
+	const row = el('div', null, 'row'); row.append(save, cancel, auto);
+	form.append(grid, row);
+	tr.replaceChildren(form);
+	pauseRefresh = true;
+}
+
 function render() {
+	pauseRefresh = false;
 	$('version').textContent = 'version ' + state.version;
 	const p = state.pipeline, s = $('status'); s.replaceChildren();
 	if (p.not_ready) s.append(el('p', 'Not reading mail yet: ' + p.not_ready, 'bad'));
@@ -284,14 +306,16 @@ function render() {
 		for (const e of state.entries) {
 			const tr = el('tr');
 			tr.append(el('td', e.entry_date || e.created_at.slice(0, 10)));
-			const title = el('td', e.kind === 'lesson' ? `Lesson ${e.lesson_number ?? ''}: ${e.title}`.replace(' :', ':') : e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
+			const title = el('td', e.kind === 'lesson' ? `Lesson ${e.lesson_number ?? ''}: ${e.title}`.replace(' :', ':') : e.title);
+			title.append(el('div', (e.kind === 'lesson' ? 'Lesson' : 'Daily reading') + (e.label_manual ? ' (set by hand)' : ''), 'muted small')); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
 			const audioText = e.audio_count ? `${e.audio_count} of ${state.voice_count} voice${state.voice_count === 1 ? '' : 's'}, ${Math.round(e.audio_bytes / 1024)} kB` : e.audio_error ? 'failed' : 'not yet';
 			const audio = el('td', audioText + (e.audio_count && e.audio_error ? ' (some failed)' : ''), e.audio_error ? 'bad' : '');
 			if (e.audio_error) audio.title = e.audio_error; tr.append(audio);
 			const actions = el('td');
 			const redo = el('button', 'Redo audio', 'plain small'); redo.onclick = act(async () => { await api(`/admin/api/entries/${e.id}/audio`, {}); toast('Making audio…'); });
 			const del = el('button', 'Delete', 'plain small'); del.onclick = act(async () => { if (confirm('Delete "' + e.title + '"? It is also removed from the app.')) { state = await api(`/admin/api/entries/${e.id}/delete`, {}); render(); } });
-			actions.append(redo, ' ', del); tr.append(actions); et.append(tr);
+			const fix = el('button', 'Edit', 'plain small'); fix.onclick = () => editLabel(tr, e);
+			actions.append(fix, ' ', redo, ' ', del); tr.append(actions); et.append(tr);
 		}
 	}
 	const mt = $('messages'); mt.replaceChildren();

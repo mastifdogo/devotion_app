@@ -42,7 +42,7 @@ test('the email overrides the model, and a split lesson is joined again', () => 
 	assert.deepEqual([reading.kind, reading.lesson_number, reading.entry_date, reading.title], ['daily_reading', 11, '2026-11-15', 'The struggle is spiritual']);
 
 	// An email the subject says nothing about keeps what the model said.
-	assert.deepEqual(applySubject(model, { subject: 'Weekly digest', text: '' }), model);
+	assert.deepEqual(applySubject(model, { subject: 'Weekly digest', text: '' }), model.map((e) => ({ ...e, kind: 'daily_reading', lesson_number: null })));
 	assert.deepEqual(applySubject([], { subject: 'Lesson 8 – x', text: '' }), []);
 });
 

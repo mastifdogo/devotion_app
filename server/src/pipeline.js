@@ -125,15 +125,17 @@ export class Pipeline {
 			}
 			if (message.text.length > MAX_EMAIL_CHARS) throw Object.assign(new Error(`The email is too long (${message.text.length} characters).`), { retryable: false });
 			const entries = applySubject(await this.extractor.extract(message), message);
-			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, kind, lesson_number, title, entry_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, kind, lesson_number, title, entry_date, auto_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 			this.db.exec('BEGIN');
 			try {
 				// A retry after a half-finished attempt must not leave duplicates.
 				this.db.prepare('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE gmail_id = ? AND deleted_at IS NULL').run(now(), now(), id);
 				entries.forEach((e, i) => {
 					const t = now();
-					insert.run(id, i, e.kind || 'daily_reading', e.lesson_number ?? null, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
+					const date = e.entry_date || (message.date ? message.date.slice(0, 10) : null);
+					// auto_date keeps the date the rules found, for "Sort automatically" after a correction by hand.
+					insert.run(id, i, e.kind || 'daily_reading', e.lesson_number ?? null, e.title, date, date, e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
 				});
 				record.run(id, message.subject, message.from, message.date, entries.length ? 'done' : 'skipped', entries.length ? null : 'No devotion found in this email.', attempts + 1, now());
 				this.db.exec('COMMIT');
@@ -159,8 +161,8 @@ export class Pipeline {
 	 * certain, and marks changed entries so the app picks them up.
 	 */
 	reclassify() {
-		const rows = this.db.prepare('SELECT id, kind, lesson_number, title, entry_date, body, source_subject FROM entries WHERE deleted_at IS NULL AND source_subject IS NOT NULL').all();
-		const update = this.db.prepare('UPDATE entries SET kind = ?, lesson_number = ?, entry_date = ?, updated_at = ? WHERE id = ?');
+		const rows = this.db.prepare('SELECT id, kind, lesson_number, title, entry_date, auto_date, body, source_subject FROM entries WHERE deleted_at IS NULL AND source_subject IS NOT NULL AND label_manual = 0').all();
+		const update = this.db.prepare('UPDATE entries SET kind = ?, lesson_number = ?, entry_date = ?, title = ?, updated_at = ? WHERE id = ?');
 		let changed = 0;
 		for (const row of rows) {
 			const known = classifySubject(row.source_subject);
@@ -168,16 +170,34 @@ export class Pipeline {
 			let { lesson_number: number, entry_date: date } = row;
 			if (known.kind === 'lesson') {
 				number = known.lesson_number;
-				date = lessonDate(row.body, number) || date;
+				date = lessonDate(row.body, number) || row.auto_date || date;
 			} else {
 				date = known.entry_date;
 			}
-			if (row.kind === known.kind && row.lesson_number === number && row.entry_date === date) continue;
-			update.run(known.kind, number ?? null, date, now(), row.id);
+			const title = known.title || row.title;
+			if (row.kind === known.kind && row.lesson_number === number && row.entry_date === date && row.title === title) continue;
+			update.run(known.kind, number ?? null, date, title, now(), row.id);
 			changed++;
 		}
 		if (changed) this.log.info(`sorted ${changed} earlier entr${changed === 1 ? 'y' : 'ies'} into lessons and daily readings`);
 		return changed;
+	}
+
+	/**
+	 * A correction made by hand on the admin page. It sticks: sorting by rule
+	 * never changes this entry again, until it is handed back to the rules.
+	 */
+	relabel(id, label) {
+		const entry = this.db.prepare('SELECT id FROM entries WHERE id = ? AND deleted_at IS NULL').get(id);
+		if (!entry) return false;
+		if (label === 'auto') {
+			this.db.prepare('UPDATE entries SET label_manual = 0 WHERE id = ?').run(id);
+			this.reclassify();
+			return true;
+		}
+		this.db.prepare('UPDATE entries SET kind = ?, lesson_number = ?, entry_date = ?, title = ?, label_manual = 1, updated_at = ? WHERE id = ?')
+			.run(label.kind, label.lesson_number, label.entry_date, label.title, now(), id);
+		return true;
 	}
 
 	/** Gives audio from before voices were tracked the voice it was made in. */

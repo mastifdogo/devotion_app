@@ -23,7 +23,7 @@ const b64 = (s) => Buffer.from(s).toString('base64url');
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 const quiet = { info() {}, error() {} };
 
-async function setup(t, { extractResult, github } = {}) {
+async function setup(t, { extractResult, github, m1 } = {}) {
 	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-test-'));
 	const audioDir = path.join(dir, 'audio');
 	const config = { version: '1.0.0', port: 0, dataDir: dir, adminPassword: '', githubRepo: 'o/r', updateRequestFile: path.join(dir, 'update-request'), env: {} };
@@ -31,7 +31,7 @@ async function setup(t, { extractResult, github } = {}) {
 	const settings = new Settings(db, {});
 	const calls = { google: [], claude: [], run: [], github: [], smb: [], web: [] };
 	const mails = {
-		m1: { id: 'm1', internalDate: '1763200000000', payload: { mimeType: 'text/html', headers: [{ name: 'Subject', value: 'Daily <b>bread</b>' }, { name: 'From', value: 'daily@example.org' }], body: { data: b64('<p>Give us this day.</p><p>Unsubscribe</p>') } } },
+		m1: { id: 'm1', internalDate: '1763200000000', payload: { mimeType: 'text/html', headers: [{ name: 'Subject', value: m1?.subject ?? 'Daily <b>bread</b>' }, { name: 'From', value: 'daily@example.org' }], body: { data: b64(m1?.html ?? '<p>Give us this day.</p><p>Unsubscribe</p>') } } },
 		m2: { id: 'm2', internalDate: '1763300000000', payload: { mimeType: 'text/plain', headers: [{ name: 'Subject', value: 'Receipt' }], body: { data: b64('Thanks for your order') } } },
 	};
 	const googleFetch = async (url, init = {}) => {
@@ -244,28 +244,53 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.equal((await call(`/api/entries/${entry.id}/audio`)).status, 404);
 });
 
-test('a lesson is marked as one, with its number, its own date and its own audio intro', async (t) => {
-	const lesson = { kind: 'lesson', lesson_number: 11, title: 'Victory After Struggling', entry_date: '2026-11-15', scripture: 'Genesis 32:24-31; 1 Samuel 17:45-49', summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
-	const { call, calls, connectGmail } = await setup(t, { extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [lesson] }) });
+test('a lesson is sorted from its subject, not by the model, and can be corrected by hand', async (t) => {
+	// The model says nothing about lessons; it only cleans the text and summarizes.
+	const lesson = { title: 'Victory After Struggling', entry_date: '2026-11-08', scripture: 'Genesis 32:24-31; 1 Samuel 17:45-49', summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
+	const { call, calls, connectGmail, pipeline } = await setup(t, {
+		m1: { subject: 'Lesson 11 – Victory After Struggling', html: '<p>COGICM Daily Bible Readings</p><p>Victory After Struggling</p><p>Lesson 11</p><p>November 15, 2026</p><p>Give us this day.</p>' },
+		extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [lesson] }),
+	});
+	assert.ok(!JSON.stringify(calls.claude).includes('lesson_number'));
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
 	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
 	await connectGmail();
-	const [entry] = (await (await call('/api/entries')).json()).entries;
+	assert.ok(!('kind' in calls.claude[0].output_config.format.schema.properties.entries.items.properties));
+	let [entry] = (await (await call('/api/entries')).json()).entries;
 	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date], ['lesson', 11, 'Victory After Struggling', '2026-11-15']);
-	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Lesson 11\.\nVictory After Struggling\.\nGenesis 32:24-31; 1 Samuel 17:45-49\.\n/);
-	const state = await (await call('/admin/api/state')).json();
-	assert.deepEqual(state.entries.map((e) => [e.kind, e.lesson_number]), [['lesson', 11]]);
+	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Lesson 11\.\nVictory After Struggling\.\n/);
+
+	// A correction by hand, which the rules then leave alone.
+	for (const bad of [{ kind: 'sermon', title: 'x' }, { kind: 'lesson', lesson_number: 'eleven', title: 'x' }, { kind: 'lesson', entry_date: '2026-02-30x', title: 'x' }, { kind: 'lesson', title: ' ' }]) {
+		assert.equal((await call(`/admin/api/entries/${entry.id}/label`, { body: bad })).status, 400);
+	}
+	const before = (await (await call('/api/entries')).json()).server_time;
+	await new Promise((r) => setTimeout(r, 5));
+	let state = await (await call(`/admin/api/entries/${entry.id}/label`, { body: { kind: 'lesson', lesson_number: '12', entry_date: '2026-11-22', title: ' Victory  After Struggling ' } })).json();
+	assert.deepEqual(state.entries.map((e) => [e.kind, e.lesson_number, e.entry_date, e.title, e.label_manual]), [['lesson', 12, '2026-11-22', 'Victory After Struggling', 1]]);
+	pipeline.reclassify();
+	[entry] = (await (await call(`/api/entries?since=${encodeURIComponent(before)}`)).json()).entries;
+	assert.deepEqual([entry.lesson_number, entry.entry_date], [12, '2026-11-22']); // and the app sees the change
+	// Handing it back to the rules restores what the email says.
+	state = await (await call(`/admin/api/entries/${entry.id}/label`, { body: { auto: true } })).json();
+	await call(`/admin/api/entries/${entry.id}/label`, { body: { kind: 'daily_reading', lesson_number: null, entry_date: '2026-11-22', title: 'Wrong' } });
+	state = await (await call(`/admin/api/entries/${entry.id}/label`, { body: { auto: true } })).json();
+	assert.deepEqual(state.entries.map((e) => [e.kind, e.lesson_number, e.entry_date, e.title, e.label_manual]), [['lesson', 11, '2026-11-15', 'Victory After Struggling', 0]]);
+	assert.equal((await call('/admin/api/entries/999/label', { body: { auto: true } })).status, 404);
 });
 
-test('a daily reading is marked as one, with its own date and the lesson it belongs to', async (t) => {
-	const reading = { kind: 'daily_reading', lesson_number: 11, title: 'The struggle is spiritual', entry_date: '2026-11-15', scripture: '2 Corinthians 10:4-6', summary: 'S.', body: 'For the weapons of our warfare are not carnal.', references: [] };
-	const { call, calls, connectGmail } = await setup(t, { extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [reading] }) });
+test('a daily reading is sorted from its subject, with its day, its week\'s lesson and its passage', async (t) => {
+	const reading = { title: 'The struggle is spiritual', entry_date: '2026-11-14', scripture: null, summary: 'S.', body: 'For the weapons of our warfare are not carnal.', references: [] };
+	const { call, calls, connectGmail } = await setup(t, {
+		m1: { subject: 'November 15, 2026 – The struggle is spiritual', html: '<p>COGICM Daily Bible Readings</p><p><b>Lesson 11 – Victory After Struggling</b><br><b>Today’s Quote:</b> “A quote.”<br><b>November 15, 2026 – The struggle is spiritual</b><br><b>2 Cor. 10:4-6</b></p><p>KJV<br>4 Give us this day.</p>' },
+		extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [reading] }),
+	});
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
 	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
 	await connectGmail();
 	const [entry] = (await (await call('/api/entries')).json()).entries;
-	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date], ['daily_reading', 11, 'The struggle is spiritual', '2026-11-15']);
-	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Sunday, November 15\.\nThe struggle is spiritual\.\n2 Corinthians 10:4-6\.\n/);
+	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date, entry.scripture], ['daily_reading', 11, 'The struggle is spiritual', '2026-11-15', '2 Cor. 10:4-6']);
+	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Sunday, November 15\.\nThe struggle is spiritual\.\n2 Cor\. 10:4-6\.\n/);
 });
 
 test('entries made before sorting by subject are sorted at startup', async (t) => {

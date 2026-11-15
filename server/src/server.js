@@ -174,7 +174,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady() },
 		can_install_updates: updater.canInstall(),
 		password_fixed: Boolean(config.adminPassword),
-		entries: db.prepare(`SELECT id, kind, lesson_number, title, entry_date, scripture, source_subject, created_at,
+		entries: db.prepare(`SELECT id, kind, lesson_number, label_manual, title, entry_date, scripture, source_subject, created_at,
 				(SELECT COUNT(*) FROM entry_audio a WHERE a.entry_id = e.id AND a.file IS NOT NULL) AS audio_count,
 				(SELECT COALESCE(SUM(bytes), 0) FROM entry_audio a WHERE a.entry_id = e.id AND a.file IS NOT NULL) AS audio_bytes,
 				(SELECT error FROM entry_audio a WHERE a.entry_id = e.id AND a.error IS NOT NULL LIMIT 1) AS audio_error
@@ -438,6 +438,26 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		requireAdmin(req);
 		await readJson(req);
 		if (!(await pipeline.deleteEntry(Number(m[1])))) throw new HttpError(404, 'No such entry.');
+		send(res, 200, await adminState());
+	});
+
+	// Correct an entry's tab, lesson number, date or title by hand.
+	route('POST', /^\/admin\/api\/entries\/(\d+)\/label$/, async (req, res, m) => {
+		requireAdmin(req);
+		const body = await readJson(req);
+		let label = 'auto';
+		if (!body.auto) {
+			const kind = body.kind;
+			if (kind !== 'lesson' && kind !== 'daily_reading') throw new HttpError(400, 'Choose Daily reading or Lesson.');
+			const number = body.lesson_number === null || body.lesson_number === '' || body.lesson_number === undefined ? null : Number(body.lesson_number);
+			if (number !== null && !(Number.isInteger(number) && number > 0 && number < 10000)) throw new HttpError(400, 'The lesson number must be a whole number.');
+			const date = typeof body.entry_date === 'string' && body.entry_date.trim() ? body.entry_date.trim() : null;
+			if (date !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)))) throw new HttpError(400, 'The date must be a real date.');
+			const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim() : '';
+			if (!title || title.length > 200) throw new HttpError(400, 'Enter a title.');
+			label = { kind, lesson_number: number, entry_date: date, title };
+		}
+		if (!pipeline.relabel(Number(m[1]), label)) throw new HttpError(404, 'No such entry.');
 		send(res, 200, await adminState());
 	});
 

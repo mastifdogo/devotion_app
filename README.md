@@ -101,11 +101,24 @@ Gmail search syntax, for example `from:daily@example.org newer_than:30d`.
 
 Each matching email is read once. Claude returns the devotion(s) in it as
 entries (title, date, scripture reference, a short summary, full text, and
-every Bible reference in the text so the app can link it to the passage). It
-also sorts each one as a **daily reading** (labelled in the app with its day),
-a numbered **lesson** (labelled with the lesson number and the date it is
-for), or anything else; the app shows each sort on its own tab. Claude
-leaves out the newsletter material around them; an email with no devotion in
+every Bible reference in the text so the app can link it to the passage).
+
+Sorting into the app's tabs is done by rules, not by Claude, so it comes out
+the same every time:
+
+| Subject | Tab | Date | Lesson |
+|---|---|---|---|
+| `Lesson 11 – Victory After Struggling` | Lessons | the date printed under "Lesson 11" in the email (the Sunday it is taught) | 11 |
+| `November 15, 2026 – The struggle is spiritual` | Daily readings | the date in the subject | the lesson named in the reading's heading |
+| anything else | Daily readings | the date Claude found, or the day it arrived | none |
+
+A daily reading's scripture is the passage printed under its dated heading.
+If one is filed wrong, press **Edit** next to it in the admin page's
+*Entries* table to set the tab, lesson number, date or title by hand; the
+rules then leave it alone (*Sort automatically* hands it back to them). The
+app shows the change on its next refresh.
+
+Claude leaves out the newsletter material around them; an email with no devotion in
 it creates nothing. The *Emails read* table shows what happened to each one.
 
 ### Archive: keeping only the last month on the server

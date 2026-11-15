@@ -1,3 +1,6 @@
+// Sorting is done here, by rules, not by the model: the result is the same
+// every time, and a wrong one is corrected by hand on the admin page.
+//
 // Sorting by the email itself. The Daily Bible Readings emails name what they
 // are in the subject:
 //   "Lesson 11 – Victory After Struggling"              a weekly lesson
@@ -61,7 +64,9 @@ export function lessonDate(text, number) {
  */
 export function applySubject(entries, message) {
 	const known = classifySubject(message.subject);
-	if (!known || entries.length === 0) return entries;
+	// Anything the subject doesn't identify is a daily reading until someone says otherwise.
+	if (!known) return entries.map((e) => ({ ...e, kind: 'daily_reading', lesson_number: null }));
+	if (entries.length === 0) return entries;
 	let entry = entries[0];
 	if (entries.length > 1) {
 		let body = '';

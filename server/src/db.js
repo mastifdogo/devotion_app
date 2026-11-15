@@ -86,7 +86,7 @@ export function openDb(dataDir) {
 	// Columns added after the first release; a database made by an older
 	// version gets them here.
 	const have = new Set(db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name));
-	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT'], ['kind', "TEXT NOT NULL DEFAULT 'daily_reading'"], ['lesson_number', 'INTEGER']]) {
+	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT'], ['kind', "TEXT NOT NULL DEFAULT 'daily_reading'"], ['lesson_number', 'INTEGER'], ['label_manual', 'INTEGER NOT NULL DEFAULT 0'], ['auto_date', 'TEXT']]) {
 		if (!have.has(column)) db.exec(`ALTER TABLE entries ADD COLUMN ${column} ${type}`);
 	}
 	// Audio used to be one file per entry, in the entries table. It moves to

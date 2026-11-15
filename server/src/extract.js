@@ -24,10 +24,8 @@ export const ENTRY_SCHEMA = {
 			items: {
 				type: 'object',
 				additionalProperties: false,
-				required: ['kind', 'lesson_number', 'title', 'entry_date', 'scripture', 'summary', 'body', 'references'],
+				required: ['title', 'entry_date', 'scripture', 'summary', 'body', 'references'],
 				properties: {
-					kind: { type: 'string', enum: ['lesson', 'daily_reading'], description: '"lesson": a numbered study lesson (such as a weekly Sunday school lesson, with a lesson number and the date it is taught). "daily_reading": everything else, such as a short reading or devotion for one day.' },
-					lesson_number: nullableInteger('For a lesson, its number ("Lesson 11" → 11). For a daily reading that says which lesson it belongs to ("Lesson 11 – …" in its heading), that lesson\'s number. Otherwise null.'),
 					title: { type: 'string', description: 'The devotion\'s own title; if it has none, a short faithful one.' },
 					entry_date: nullableString('The date the devotion is for, as YYYY-MM-DD, or null if the email does not say. For a lesson or a daily reading, the date printed in it (often later than the day the email was sent), not the date of the email.'),
 					scripture: nullableString('The scripture reference(s) the devotion is built on, e.g. "John 3:16-17; Psalm 23", or null.'),
@@ -66,9 +64,7 @@ Your job is to return the devotion(s) the email contains. The body you return is
 
 The app links Bible references in the text to the passage itself, so list each one the body contains: the wording as it stands in your body text, and the book, chapter and verses it means. Work out abbreviated and partial references from their context ("v. 5" after a citation of Romans 8 is Romans 8:5; "1 Cor." is 1 Corinthians). A reference that names several separate passages ("John 1:1, 14") is one item per passage, each with the part of the text that names it. Leave out anything you cannot place with confidence.
 
-Some emails are study lessons rather than daily devotions: their subject reads like "Lesson 11 – Victory After Struggling", and they carry a lesson number and a date (for example "Lesson 11", "November 15, 2026") and sections such as the lesson scripture, study notes, practical truths and discussion questions. Mark those as a lesson with their number, use the lesson's own title (not "Lesson 11"), and keep every section of the lesson in the body, including memory verses for the children's classes, the questions and the footnotes; leave out only the newsletter material around it.
-
-Other emails are daily readings: a short passage for one dated day, with a subject such as "November 15, 2026 – The struggle is spiritual" followed by the verses and sometimes a quote for the day. Mark those, and any other devotional text that is not a numbered lesson, as a daily reading, with the day's printed date, the day's own heading as the title ("The struggle is spiritual", without the date), the passage as the scripture reference, and the quote and the verses in the body. If the reading names the lesson it belongs to, give that lesson's number.
+Some emails are weekly study lessons (lesson scripture, study notes, practical truths, discussion questions, footnotes): keep every section of a lesson in the body, including the memory verses for the children's classes, and use the lesson's own title (not "Lesson 11"). Others are daily readings (a quote for the day, a dated heading and a passage): use the day's own heading as the title, without the date, and keep the quote and the verses in the body. Which of the two an email is, and its lesson number, are worked out from the email itself after you answer; you don't need to say.
 
 An email can hold several devotions (a weekly digest, for instance); return each as its own entry. If the email is something else entirely (a receipt, a notice, an advert with no devotional text), return an empty list rather than inventing an entry.
 
@@ -170,10 +166,7 @@ export function normalizeEntries(parsed) {
 		if (!body) continue;
 		const text = body.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n');
 		const date = clean(e.entry_date);
-		const kind = e.kind === 'lesson' ? 'lesson' : 'daily_reading';
 		out.push({
-			kind,
-			lesson_number: Number.isInteger(e.lesson_number) && e.lesson_number > 0 && e.lesson_number < 10000 ? e.lesson_number : null,
 			title: clean(e.title) || 'Untitled',
 			entry_date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
 			scripture: clean(e.scripture),

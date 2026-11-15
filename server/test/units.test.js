@@ -67,9 +67,7 @@ test('compareVersions', () => {
 
 test('normalizeEntries drops empty bodies and bad dates', () => {
 	const out = normalizeEntries({ entries: [{ title: ' T ', entry_date: 'Nov 3', scripture: '', summary: null, body: 'a\n\n\n\nb' }, { title: 'x', body: '  ' }] });
-	assert.deepEqual(out, [{ kind: 'daily_reading', lesson_number: null, title: 'T', entry_date: null, scripture: null, summary: '', body: 'a\n\nb', references: [] }]);
-	const lessons = normalizeEntries({ entries: [{ kind: 'lesson', lesson_number: 11, title: 'V', entry_date: '2026-11-15', body: 'x' }, { kind: 'lesson', lesson_number: -2, title: 'W', body: 'y' }, { kind: 'sermon', lesson_number: 3, title: 'Z', body: 'z' }, { kind: 'daily_reading', lesson_number: 11, title: 'R', body: 'r' }, { kind: 'devotion', lesson_number: 4, title: 'D', body: 'd' }] });
-	assert.deepEqual(lessons.map((e) => [e.kind, e.lesson_number]), [['lesson', 11], ['lesson', null], ['daily_reading', 3], ['daily_reading', 11], ['daily_reading', 4]]);
+	assert.deepEqual(out, [{ title: 'T', entry_date: null, scripture: null, summary: '', body: 'a\n\nb', references: [] }]);
 	assert.deepEqual(normalizeEntries(null), []);
 });
 
