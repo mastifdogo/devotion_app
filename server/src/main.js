@@ -11,6 +11,7 @@ import { Updater } from './update.js';
 import { Voices } from './voices.js';
 import { Bibles } from './bibles.js';
 import { Archiver } from './archive.js';
+import { Wallpapers } from './wallpapers.js';
 import { createServer } from './server.js';
 
 const config = loadConfig();
@@ -32,9 +33,10 @@ const voices = new Voices({ settings, dataDir: config.dataDir });
 const bibles = new Bibles({ db, dataDir: config.dataDir });
 const tts = new Tts({ settings, audioDir, voices });
 const archiver = new Archiver({ db, settings, audioDir });
+const wallpapers = new Wallpapers({ db, dataDir: config.dataDir });
 const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver });
 const updater = new Updater({ config, settings });
-const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir });
+const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir });
 
 pipeline.adoptLegacyAudio();
 pipeline.reclassify();

@@ -67,6 +67,22 @@ CREATE TABLE IF NOT EXISTS entry_audio (
 	created_at TEXT NOT NULL,
 	PRIMARY KEY (entry_id, voice)
 );
+CREATE TABLE IF NOT EXISTS wallpapers (
+	id TEXT PRIMARY KEY,             -- Wallhaven's id
+	topic TEXT NOT NULL,
+	topic_name TEXT NOT NULL,
+	width INTEGER,
+	height INTEGER,
+	colors TEXT,
+	file TEXT NOT NULL,
+	type TEXT NOT NULL,
+	bytes INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	thumb_file TEXT NOT NULL,
+	thumb_type TEXT NOT NULL,
+	source_url TEXT NOT NULL,
+	added_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS bibles (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,

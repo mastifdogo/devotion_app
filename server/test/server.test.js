@@ -18,6 +18,7 @@ import { createServer } from '../src/server.js';
 import { Voices } from '../src/voices.js';
 import { Bibles } from '../src/bibles.js';
 import { Archiver } from '../src/archive.js';
+import { Wallpapers } from '../src/wallpapers.js';
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -99,9 +100,27 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 		return { code: 0, out };
 	};
 	const archiver = new Archiver({ db, settings, audioDir, runImpl: smbRun, log: quiet });
+	// A stand-in for Wallhaven: its search, single-wallpaper and image hosts.
+	const jpeg = (n) => new Response(Buffer.alloc(n, 9), { headers: { 'content-type': 'image/jpeg' } });
+	const whItem = (id, extra = {}) => ({ id, url: `https://wallhaven.cc/w/${id}`, purity: 'sfw', category: 'general', dimension_x: 1080, dimension_y: 1920, resolution: '1080x1920', colors: ['#112233'], file_size: 5000, path: `https://w.wallhaven.cc/full/${id.slice(0, 2)}/wallhaven-${id}.jpg`, thumbs: { large: `https://th.wallhaven.cc/lg/${id.slice(0, 2)}/${id}.jpg`, small: `https://th.wallhaven.cc/small/${id.slice(0, 2)}/${id}.jpg` }, ...extra });
+	const wallhaven = { items: { aaa111: whItem('aaa111'), bbb222: whItem('bbb222'), evil00: whItem('evil00', { path: 'https://evil.example/x.jpg' }), nsfw01: whItem('nsfw01', { purity: 'nsfw' }) } };
+	const whFetch = async (url) => {
+		const u = new URL(String(url));
+		calls.web.push(u.href);
+		if (wallhaven.busy) return new Response('{}', { status: 429 });
+		if (u.hostname === 'wallhaven.cc' && u.pathname === '/api/v1/search') {
+			return json({ data: [whItem('aaa111'), whItem('nsfw01', { purity: 'nsfw' }), { id: 'nothumb', purity: 'sfw' }, whItem('bbb222')], meta: { current_page: 1, last_page: 3, per_page: 24, total: 70, seed: null } });
+		}
+		const one = /^\/api\/v1\/w\/(\w+)$/.exec(u.pathname);
+		if (u.hostname === 'wallhaven.cc' && one) return wallhaven.items[one[1]] ? json({ data: wallhaven.items[one[1]] }) : json({ error: 'Nothing here' }, 404);
+		if (u.hostname === 'w.wallhaven.cc') return jpeg(5000);
+		if (u.hostname === 'th.wallhaven.cc') return jpeg(300);
+		throw new Error('the server must not fetch ' + u.href);
+	};
+	const wallpapers = new Wallpapers({ db, dataDir: dir, fetchImpl: whFetch, log: quiet });
 	const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver, log: quiet });
 	const updater = new Updater({ config, settings, fetchImpl: async (url, init) => { calls.github.push({ url: String(url), headers: init.headers }); return github(); } });
-	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir, log: quiet });
+	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir, log: quiet });
 	await new Promise((r) => server.listen(0, '127.0.0.1', r));
 	const base = `http://127.0.0.1:${server.address().port}`;
 	t.after(() => { server.close(); server.closeAllConnections(); db.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -122,7 +141,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 		await call(`/oauth/callback?state=${new URL(url).searchParams.get('state')}&code=good-code`);
 		while (pipeline.running) await new Promise((r) => setTimeout(r, 5));
 	};
-	return { call, calls, settings, db, pipeline, gmail, config, dir, audioDir, share, archiver, base, connectGmail, dropCookie: () => (cookie = '') };
+	return { call, calls, settings, db, pipeline, gmail, config, dir, audioDir, share, archiver, base, connectGmail, wallhaven, dropCookie: () => (cookie = '') };
 }
 
 test('first visit sets the password; afterwards only that password logs in', async (t) => {
@@ -308,6 +327,64 @@ test('entries made before sorting by subject are sorted at startup', async (t) =
 		{ kind: 'daily_reading', lesson_number: null, entry_date: '2026-11-02', touched: 0 },
 	]);
 	assert.equal(pipeline.reclassify(), 0); // nothing more to do the second time
+});
+
+test('wallpapers: found on Wallhaven by the admin, kept on the server, streamed to the app', async (t) => {
+	const { call, calls, base, wallhaven, dropCookie } = await setup(t);
+	assert.deepEqual(await (await call('/api/wallpapers')).json(), { topics: [], wallpapers: [] });
+	assert.equal((await call('/admin/api/wallpapers/search', { body: {} })).status, 401);
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	const catalog = await (await call('/admin/api/wallpapers')).json();
+	assert.equal(catalog.catalog[0].id, 'nature');
+
+	// Searching: always SFW, the selectors become Wallhaven's parameters, and non-SFW results are dropped.
+	const found = await (await call('/admin/api/wallpapers/search', { body: { q: 'mountains', kinds: { general: true, anime: true }, order: 'top', portrait: true } })).json();
+	const searched = new URL(calls.web.at(-1));
+	assert.deepEqual(Object.fromEntries(searched.searchParams), { q: 'mountains', categories: '110', purity: '100', sorting: 'toplist', topRange: '1M', ratios: 'portrait', atleast: '1080x1920', page: '1' });
+	assert.deepEqual(found.results.map((r) => [r.id, r.on_server]), [['aaa111', false], ['bbb222', false]]);
+	assert.deepEqual([found.page, found.last_page], [1, 3]);
+	await call('/admin/api/wallpapers/search', { body: { kinds: {}, order: 'random', seed: 'Ab12', portrait: false, page: 2 } });
+	assert.deepEqual(Object.fromEntries(new URL(calls.web.at(-1)).searchParams), { q: '', categories: '100', purity: '100', sorting: 'random', seed: 'Ab12', page: '2' });
+
+	// Adding: the server looks the id up itself and only downloads from Wallhaven's image hosts.
+	let added = await call('/admin/api/wallpapers/add', { body: { id: 'aaa111', topic: { id: 'mountains' } } });
+	assert.deepEqual((({ id, topic, width, height, bytes, source_url }) => ({ id, topic, width, height, bytes, source_url }))(await added.json()), { id: 'aaa111', topic: 'mountains', width: 1080, height: 1920, bytes: 5000, source_url: 'https://wallhaven.cc/w/aaa111' });
+	assert.equal((await call('/admin/api/wallpapers/add', { body: { id: 'evil00', topic: 'nature' } })).status, 502);
+	assert.ok(!calls.web.some((u) => u.includes('evil.example')));
+	assert.equal((await call('/admin/api/wallpapers/add', { body: { id: 'nsfw01', topic: 'nature' } })).status, 400);
+	assert.equal((await call('/admin/api/wallpapers/add', { body: { id: '../etc', topic: 'nature' } })).status, 400);
+	assert.equal((await call('/admin/api/wallpapers/add', { body: { id: 'gone99', topic: 'nature' } })).status, 404);
+	assert.equal((await call('/admin/api/wallpapers/add', { body: { id: 'bbb222', topic: { name: '  Lavender   fields ' } } })).status, 200);
+	wallhaven.busy = true;
+	const busy = await call('/admin/api/wallpapers/search', { body: {} });
+	assert.equal(busy.status, 429);
+	assert.match((await busy.json()).error, /too many requests/);
+	wallhaven.busy = false;
+
+	// The app: topics with counts in selector order, the list, thumbnails and full images. No admin login needed.
+	dropCookie();
+	const list = await (await call('/api/wallpapers')).json();
+	assert.deepEqual(list.topics, [{ id: 'mountains', name: 'Mountains', count: 1 }, { id: 'lavender-fields', name: 'Lavender fields', count: 1 }]);
+	assert.deepEqual(list.wallpapers.map((w) => [w.id, w.topic]).sort(), [['aaa111', 'mountains'], ['bbb222', 'lavender-fields']]);
+	assert.equal(list.wallpapers[0].topic_name, undefined);
+	const full = await fetch(`${base}/api/wallpapers/aaa111`);
+	assert.equal(full.headers.get('content-type'), 'image/jpeg');
+	const bytes = Buffer.from(await full.arrayBuffer());
+	assert.equal(bytes.length, 5000);
+	assert.equal(createHash('sha256').update(bytes).digest('hex'), list.wallpapers.find((w) => w.id === 'aaa111').sha256);
+	assert.equal(Buffer.from(await (await fetch(`${base}/api/wallpapers/aaa111/thumb`)).arrayBuffer()).length, 300);
+	assert.equal((await call('/api/wallpapers/zzz999')).status, 404);
+
+	// "Add the top 12" skips what is already there; removing deletes the files.
+	await call('/admin/api/setup', { body: { password: 'x' } }).catch(() => {});
+	await call('/admin/api/login', { body: { password: 'correct horse' } });
+	assert.equal((await call('/admin/api/wallpapers/add-top', { body: { q: 'nature', topic: 'nature' } })).status, 202);
+	await new Promise((r) => setTimeout(r, 50));
+	assert.equal((await (await call('/api/wallpapers')).json()).wallpapers.length, 2); // both search results were already here
+	const after = await (await call('/admin/api/wallpapers/aaa111/delete', { body: {} })).json();
+	assert.deepEqual(after.wallpapers.map((w) => w.id), ['bbb222']);
+	assert.equal((await call('/api/wallpapers/aaa111')).status, 404);
+	assert.equal((await call('/admin/api/wallpapers/aaa111/delete', { body: {} })).status, 404);
 });
 
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {

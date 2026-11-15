@@ -136,6 +136,18 @@ or removed.
 The share is written with `smbclient`, so nothing has to be mounted in the
 container.
 
+### Wallpapers
+
+Under **Wallpapers**, pick a topic (Nature, Mountains, Ocean, … or your own
+words), which kinds (General, Anime, People), the order and whether only
+phone-shaped images should show, then *Search Wallhaven*. Tap the ones you
+like and press *Add selected* (or *Add the top 12* for the whole first page):
+the server downloads them from [wallhaven.cc](https://wallhaven.cc), and the
+app's Wallpapers screen shows them by topic. Only safe-for-work images are
+ever searched, without a Wallhaven account. The phone never contacts
+Wallhaven: it streams wallpapers from this server while it can reach it,
+and keeps only the one it uses as the app's background.
+
 ### Bible versions
 
 Under **Bible versions**, *Add* downloads a translation to the server; the
@@ -228,6 +240,7 @@ No authentication; meant for a home network.
 | `GET /api/profiles/<id>/annotations[?since=]` | That person's highlights and notes. |
 | `PUT /api/profiles/<id>/annotations/<uuid>` | Save one; the later `updated_at` wins. Delete with `"deleted":true`. |
 | `GET /api/bibles`, `GET /api/bibles/<id>` | Bible versions on the server, and one version's text. |
+| `GET /api/wallpapers`, `/api/wallpapers/<id>`, `/api/wallpapers/<id>/thumb` | Wallpapers on the server by topic, a full image, a thumbnail. |
 
 ### Server settings
 

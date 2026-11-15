@@ -33,6 +33,16 @@ th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
 .scroll { overflow-x:auto; } pre { white-space:pre-wrap; margin:.5rem 0 0; font-size:.85rem; }
 #toast { position:fixed; left:50%; bottom:1rem; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:.6rem 1rem; border-radius:8px; max-width:90vw; display:none; }
 [hidden] { display:none !important; }
+.chips { display:flex; gap:.4rem; flex-wrap:wrap; margin:.4rem 0; }
+.chip { padding:.25rem .7rem; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--ink); font-size:.85rem; }
+.chip.on { background:var(--accent); border-color:var(--accent); color:var(--card); }
+.walls { display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:.5rem; margin-top:.6rem; }
+.wall { position:relative; aspect-ratio:9/16; border-radius:8px; overflow:hidden; background:var(--line); border:2px solid transparent; padding:0; cursor:pointer; }
+.wall img { width:100%; height:100%; object-fit:cover; display:block; }
+.wall.picked { border-color:var(--accent); }
+.wall .tag { position:absolute; left:4px; bottom:4px; right:4px; font-size:.7rem; background:rgba(0,0,0,.6); color:#fff; border-radius:4px; padding:1px 4px; text-align:center; }
+.inline { display:inline-flex; align-items:center; gap:.3rem; margin-right:.8rem; font-size:.9rem; color:var(--ink); }
+.inline input { width:auto; }
 </style>
 </head>
 <body>
@@ -136,6 +146,28 @@ th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
 	<table><tr><th>Server address</th><td class="mono" id="app-url"></td></tr></table>
 	<h2 style="margin-top:1rem">People</h2>
 	<div class="scroll"><table id="profiles"></table></div>
+</section>
+
+<section>
+	<h2>Wallpapers</h2>
+	<p class="small muted">Find wallpapers on wallhaven.cc and add them to this server; the app shows what is here, by topic, and only while it can reach this server. Only safe-for-work images are searched.</p>
+	<div class="chips" id="wall-topics"></div>
+	<div class="row" style="margin-top:.2rem">
+		<input id="wall-custom" placeholder="Or your own topic, e.g. lavender fields" style="max-width:20rem">
+	</div>
+	<div class="row">
+		<label class="inline"><input type="checkbox" id="wall-general" checked> General</label>
+		<label class="inline"><input type="checkbox" id="wall-anime"> Anime</label>
+		<label class="inline"><input type="checkbox" id="wall-people"> People</label>
+		<label class="inline"><input type="checkbox" id="wall-portrait" checked> Phone-shaped only</label>
+		<select id="wall-order" style="width:auto"><option value="top">Top this month</option><option value="latest">Latest</option><option value="random">Random</option></select>
+	</div>
+	<div class="row"><button id="wall-search">Search Wallhaven</button><button class="plain" id="wall-top">Add the top 12</button><button class="plain" id="wall-add" hidden>Add selected</button></div>
+	<div class="walls" id="wall-results"></div>
+	<div class="row"><button class="plain" id="wall-more" hidden>Load more</button></div>
+	<h2 style="margin-top:1rem">On this server</h2>
+	<p class="small muted" id="wall-count"></p>
+	<div class="walls" id="wall-server"></div>
 </section>
 
 <section>
@@ -346,12 +378,14 @@ $('login-form').onsubmit = act(async () => {
 	$('login-error').textContent = '';
 	try { await api('/admin/api/login', { password: $('password').value }); } catch (err) { $('login-error').textContent = err.message; return; }
 	$('password').value = ''; await load(true); startPolling();
+	loadWallpapers().catch(() => {});
 });
 $('setup-form').onsubmit = act(async () => {
 	$('setup-error').textContent = '';
 	if ($('new-password').value !== $('new-password2').value) { $('setup-error').textContent = 'The two passwords differ.'; return; }
 	try { await api('/admin/api/setup', { password: $('new-password').value }); } catch (err) { $('setup-error').textContent = err.message; return; }
 	$('new-password').value = $('new-password2').value = ''; await load(true); startPolling();
+	loadWallpapers().catch(() => {});
 });
 $('password-form').onsubmit = act(async () => {
 	await api('/admin/api/password', { current: $('pw-current').value, password: $('pw-new').value });
@@ -397,12 +431,89 @@ $('install-update').onclick = act(async () => {
 	$('update-result').append(el('p', 'Installing. This page reconnects when the server is back; if the version above has not changed after a few minutes, see: journalctl -u devotion-update', 'muted'));
 });
 
+// --- Wallpapers ------------------------------------------------------------
+const wall = { topics: [], topic: 'nature', page: 1, last: 1, seed: '', picked: new Set(), results: [] };
+const wallTopic = () => {
+	const custom = $('wall-custom').value.trim();
+	if (custom) return { name: custom, q: custom };
+	const t = wall.topics.find((x) => x.id === wall.topic) || wall.topics[0];
+	return { id: t.id, q: t.q };
+};
+const wallOptions = (page) => ({
+	q: wallTopic().q, page, seed: wall.seed, order: $('wall-order').value, portrait: $('wall-portrait').checked,
+	kinds: { general: $('wall-general').checked, anime: $('wall-anime').checked, people: $('wall-people').checked },
+});
+function renderWallTopics() {
+	const box = $('wall-topics'); box.replaceChildren();
+	for (const t of wall.topics) {
+		const b = el('button', t.name, 'chip' + (t.id === wall.topic && !$('wall-custom').value.trim() ? ' on' : ''));
+		b.onclick = () => { wall.topic = t.id; $('wall-custom').value = ''; renderWallTopics(); };
+		box.append(b);
+	}
+}
+function wallTile(src, label, picked) {
+	const b = el('button', null, 'wall' + (picked ? ' picked' : ''));
+	const img = el('img'); img.loading = 'lazy'; img.alt = label || ''; img.src = src; b.append(img);
+	if (label) b.append(el('span', label, 'tag'));
+	return b;
+}
+function renderWallResults(append) {
+	const box = $('wall-results'); if (!append) box.replaceChildren();
+	for (const r of wall.results.slice(append ? box.children.length : 0)) {
+		const tile = wallTile(r.thumb, r.on_server ? 'on server' : wall.picked.has(r.id) ? 'selected' : r.resolution, wall.picked.has(r.id));
+		if (!r.on_server) tile.onclick = () => { wall.picked.has(r.id) ? wall.picked.delete(r.id) : wall.picked.add(r.id); renderWallResults(false); };
+		box.append(tile);
+	}
+	$('wall-more').hidden = wall.page >= wall.last;
+	$('wall-add').hidden = wall.picked.size === 0;
+	$('wall-add').textContent = `Add ${wall.picked.size} selected`;
+}
+function renderWallServer(data) {
+	const box = $('wall-server'); box.replaceChildren();
+	$('wall-count').textContent = data.wallpapers.length ? data.topics.map((t) => `${t.name} ${t.count}`).join(' · ') : 'None yet: search above and add some.';
+	for (const w of data.wallpapers) {
+		const tile = wallTile(`/api/wallpapers/${w.id}/thumb`, w.topic_name + ' · remove', false);
+		tile.title = 'Remove from the server';
+		tile.onclick = act(async () => { if (confirm('Remove this wallpaper from the server? Phones using it in the app keep their copy.')) renderWallServer(await api(`/admin/api/wallpapers/${w.id}/delete`, {})); });
+		box.append(tile);
+	}
+}
+async function loadWallpapers() {
+	const data = await api('/admin/api/wallpapers');
+	if (!wall.topics.length) { wall.topics = data.catalog; renderWallTopics(); }
+	renderWallServer(data);
+}
+async function wallSearch(page) {
+	const r = await api('/admin/api/wallpapers/search', wallOptions(page));
+	wall.page = r.page; wall.last = r.last_page; wall.seed = r.seed || '';
+	wall.results = page === 1 ? r.results : wall.results.concat(r.results);
+	if (page === 1) wall.picked.clear();
+	if (!wall.results.length) toast('Nothing found: try another topic.');
+	renderWallResults(page !== 1);
+}
+$('wall-custom').oninput = renderWallTopics;
+$('wall-search').onclick = act(async () => { wall.seed = ''; await wallSearch(1); });
+$('wall-more').onclick = act(async () => wallSearch(wall.page + 1));
+$('wall-add').onclick = act(async () => {
+	const ids = [...wall.picked];
+	await api('/admin/api/wallpapers/add', { ids, topic: wallTopic() });
+	toast(`Downloading ${ids.length} to the server…`);
+	wall.results = wall.results.map((r) => (wall.picked.has(r.id) ? { ...r, on_server: true } : r)); wall.picked.clear(); renderWallResults(false);
+	setTimeout(() => loadWallpapers().catch(() => {}), 4000);
+});
+$('wall-top').onclick = act(async () => {
+	await api('/admin/api/wallpapers/add-top', { ...wallOptions(1), topic: wallTopic(), count: 12 });
+	toast('Downloading the top 12 to the server…');
+	setTimeout(() => loadWallpapers().catch(() => {}), 6000);
+});
+
 (async () => {
 	const session = await (await fetch('/admin/api/session')).json();
 	$('version').textContent = 'version ' + session.version;
 	if (session.needs_setup) return showSetup();
 	if (!session.logged_in) return showLogin();
 	await load(true); startPolling();
+	await loadWallpapers();
 })().catch((err) => toast(err.message));
 </script>
 </body>

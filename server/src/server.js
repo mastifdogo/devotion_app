@@ -7,6 +7,7 @@ import { stat } from 'node:fs/promises';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { TOPICS } from './wallpapers.js';
 
 const ADMIN_HTML = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'admin.html'));
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -94,7 +95,7 @@ export function parseAnnotation(id, body) {
 	return { id, entry_id: body.entry_id, start: body.start, end: body.end, color: body.color, comment: body.comment, updated_at: new Date(time).toISOString(), deleted: body.deleted === true ? 1 : 0 };
 }
 
-export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir, log = console }) {
+export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir, log = console }) {
 	const sessions = new Map(); // sid -> expiry
 	let loginFailures = 0;
 	let lastBackgroundError = null; // shown once by the admin page, then cleared
@@ -311,9 +312,21 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		}
 	});
 
+	// Wallpapers on this server: the phone gets them only from here.
+	route('GET', /^\/api\/wallpapers$/, (req, res) => send(res, 200, (({ topics, wallpapers: list }) => ({ topics, wallpapers: list.map(({ topic_name, added_at, ...w }) => w) }))(wallpapers.list())));
+
+	route('GET', /^\/api\/wallpapers\/([A-Za-z0-9]{1,16})(\/thumb)?$/, async (req, res, m) => {
+		const row = wallpapers.row(m[1]);
+		const [file, type] = m[2] ? [row?.thumb_file, row?.thumb_type] : [row?.file, row?.type];
+		const info = file && (await stat(wallpapers.file(file)).catch(() => null));
+		if (!info) throw new HttpError(404, 'No such wallpaper on this server.');
+		res.writeHead(200, { 'content-type': type, 'content-length': info.size, etag: `"${row.sha256}${m[2] ? '-t' : ''}"`, 'cache-control': 'private, max-age=86400' });
+		createReadStream(wallpapers.file(file)).on('error', () => res.destroy()).pipe(res);
+	});
+
 	// --- Admin ------------------------------------------------------------------
 	route('GET', /^\/$/, (req, res) => send(res, 302, '', { location: '/admin' }));
-	route('GET', /^\/admin\/?$/, (req, res) => send(res, 200, ADMIN_HTML, { 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" }));
+	route('GET', /^\/admin\/?$/, (req, res) => send(res, 200, ADMIN_HTML, { 'content-security-policy': "default-src 'self'; img-src 'self' https://th.wallhaven.cc; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" }));
 
 	// Tells the page which form to show before anyone is logged in.
 	route('GET', /^\/admin\/api\/session$/, (req, res) => {
@@ -526,6 +539,48 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		send(res, 202, await adminState());
 	});
 
+	const searchOptions = (b) => ({
+		q: typeof b.q === 'string' ? b.q : '',
+		kinds: { general: Boolean(b.kinds?.general), anime: Boolean(b.kinds?.anime), people: Boolean(b.kinds?.people) },
+		order: ['top', 'latest', 'random'].includes(b.order) ? b.order : 'top',
+		portrait: b.portrait !== false,
+		page: Number(b.page) || 1,
+		seed: typeof b.seed === 'string' ? b.seed : '',
+	});
+	route('GET', /^\/admin\/api\/wallpapers$/, (req, res) => {
+		requireAdmin(req);
+		send(res, 200, { catalog: TOPICS, ...wallpapers.list() });
+	});
+	route('POST', /^\/admin\/api\/wallpapers\/search$/, async (req, res) => {
+		requireAdmin(req);
+		send(res, 200, await wallpapers.search(searchOptions(await readJson(req))));
+	});
+	route('POST', /^\/admin\/api\/wallpapers\/add$/, async (req, res) => {
+		requireAdmin(req);
+		const b = await readJson(req);
+		if (Array.isArray(b.ids)) {
+			// Several at once: downloaded in the background.
+			const ids = b.ids.filter((id) => typeof id === 'string').slice(0, 48);
+			background((async () => { for (const id of ids) await wallpapers.add(id, b.topic); })(), 'Wallpaper download');
+			return send(res, 202, { ok: true, queued: ids.length });
+		}
+		send(res, 200, await wallpapers.add(String(b.id || ''), b.topic));
+	});
+	route('POST', /^\/admin\/api\/wallpapers\/add-top$/, async (req, res) => {
+		requireAdmin(req);
+		const b = await readJson(req);
+		background(wallpapers.addTop(searchOptions(b), b.topic, Number(b.count) || 12).then((r) => {
+			if (r.errors.length) throw new Error(`${r.added} added; ${r.errors.length} failed (${r.errors[0]})`);
+		}), 'Wallpaper download');
+		send(res, 202, { ok: true });
+	});
+	route('POST', /^\/admin\/api\/wallpapers\/([A-Za-z0-9]{1,16})\/delete$/, async (req, res, m) => {
+		requireAdmin(req);
+		await readJson(req);
+		if (!(await wallpapers.remove(m[1]))) throw new HttpError(404, 'No such wallpaper on this server.');
+		send(res, 200, { catalog: TOPICS, ...wallpapers.list() });
+	});
+
 	route('POST', /^\/admin\/api\/archive\/test$/, async (req, res) => {
 		requireAdmin(req);
 		await readJson(req);
@@ -570,7 +625,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		} catch (err) {
 			const status = err.status && err.status >= 400 && err.status < 600 ? err.status : err.name === 'GmailError' ? 400 : 500;
 			// Errors this server raises on purpose carry a message meant for the person at the page.
-			const ours = ['UpdateError', 'ArchiveError', 'VoiceError', 'BibleError', 'GmailError'].includes(err.name) || err instanceof HttpError;
+			const ours = ['UpdateError', 'ArchiveError', 'VoiceError', 'BibleError', 'GmailError', 'WallpaperError'].includes(err.name) || err instanceof HttpError;
 			if (status >= 500 && !ours) log.error(`${req.method} ${url.pathname}:`, err.stack || err.message);
 			if (res.headersSent) return res.destroy();
 			send(res, status, { error: status === 500 && !ours ? 'Something went wrong on the server; see its log.' : err.message });
