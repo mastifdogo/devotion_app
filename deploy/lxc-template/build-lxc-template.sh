@@ -19,10 +19,11 @@ APP_USER_UID=990 # fixed, so a host directory can be chown'ed for it (100000 + t
 #   dbus          systemctl     iproute2, ifupdown, isc-dhcp-client   Proxmox's network setup
 #   lame          encodes the voice engine's output to MP3
 #   curl, jq      the updater downloads releases with them
-PACKAGES=(systemd-sysv dbus login iproute2 iputils-ping ifupdown isc-dhcp-client openssh-server ca-certificates curl jq lame less nano procps tzdata)
+#   smbclient     writes the archive to a network share without mounting it
+PACKAGES=(systemd-sysv dbus login iproute2 iputils-ping ifupdown isc-dhcp-client openssh-server ca-certificates curl jq lame smbclient less nano procps tzdata)
 UNITS=("$APP-firstboot.service" "$APP.service" "$APP-update.path")
 # Files that must exist in the finished image; the build fails if one is missing.
-REQUIRE=(usr/bin/login sbin/init usr/bin/lame usr/bin/jq usr/bin/curl "usr/local/bin/$APP" "usr/local/sbin/$APP-firstboot" "usr/local/sbin/$APP-update"
+REQUIRE=(usr/bin/login sbin/init usr/bin/lame usr/bin/jq usr/bin/curl usr/bin/smbclient "usr/local/bin/$APP" "usr/local/sbin/$APP-firstboot" "usr/local/sbin/$APP-update"
 	"opt/$APP/current/node/bin/node" "opt/$APP/current/server/src/main.js" "etc/$APP/$APP.env" opt/piper/piper
 	"usr/local/share/$APP/voices/en_US-lessac-medium.onnx")
 
@@ -147,6 +148,7 @@ done
 in_root /opt/$APP/current/node/bin/node -e 'require("node:sqlite"); console.log("node", process.version, "with sqlite")'
 in_root runuser -u $APP -- sh -c 'cd /tmp && echo "This is the voice that will read your devotions." | /opt/piper/piper --model /usr/local/share/$APP/voices/en_US-lessac-medium.onnx --output_file t.wav >/dev/null 2>&1 && lame --quiet -m m -V 6 t.wav t.mp3 && [ "\$(wc -c <t.mp3)" -gt 5000 ] && rm t.wav t.mp3' \
 	|| { echo "the voice engine does not produce audio in the image" >&2; exit 1; }
+in_root runuser -u $APP -- smbclient --version
 echo "voice engine check: ok"
 # The server must not have left a database behind while being checked.
 [ -z "\$(ls -A "\$root/var/lib/$APP")" ] || { echo "/var/lib/$APP is not empty" >&2; exit 1; }

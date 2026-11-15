@@ -67,7 +67,7 @@ test('compareVersions', () => {
 
 test('normalizeEntries drops empty bodies and bad dates', () => {
 	const out = normalizeEntries({ entries: [{ title: ' T ', entry_date: 'Nov 3', scripture: '', summary: null, body: 'a\n\n\n\nb' }, { title: 'x', body: '  ' }] });
-	assert.deepEqual(out, [{ title: 'T', entry_date: null, scripture: null, summary: null, body: 'a\n\nb' }]);
+	assert.deepEqual(out, [{ title: 'T', entry_date: null, scripture: null, summary: '', body: 'a\n\nb' }]);
 	assert.deepEqual(normalizeEntries(null), []);
 });
 

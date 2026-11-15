@@ -1,0 +1,54 @@
+// The archive against a real SMB server and the real smbclient program.
+// Skipped unless SMB_TEST_SHARE is set; CI sets it up (see ci.yml).
+//   SMB_TEST_SHARE=//127.0.0.1/devotion  SMB_TEST_USER  SMB_TEST_PASSWORD
+//   SMB_TEST_DIR=<the directory behind the share, to look at what arrived>
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { openDb, now } from '../src/db.js';
+import { Settings } from '../src/settings.js';
+import { Archiver } from '../src/archive.js';
+
+const { SMB_TEST_SHARE: share, SMB_TEST_USER: user, SMB_TEST_PASSWORD: password, SMB_TEST_DIR: shareDir } = process.env;
+const quiet = { info() {}, error() {} };
+
+test('archive to a real SMB share', { skip: share ? false : 'SMB_TEST_SHARE is not set' }, async (t) => {
+	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-smb-test-'));
+	const audioDir = path.join(dir, 'audio');
+	mkdirSync(audioDir);
+	const db = openDb(dir);
+	t.after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+	const settings = new Settings(db, {});
+	const archiver = new Archiver({ db, settings, audioDir, log: quiet });
+	const folder = `Devotion Test/run ${Date.now()}`;
+
+	// A wrong password is reported as such, and nothing is archived.
+	settings.applyForm({ smb_share: share, smb_folder: folder, smb_username: user, smb_password: password + 'x' });
+	await assert.rejects(archiver.test(), /user name or password was not accepted/);
+	settings.applyForm({ smb_password: password });
+	assert.deepEqual(await archiver.test(), { ok: true, folder });
+	// The test leaves nothing behind but the folder itself.
+	assert.deepEqual(existsSync(path.join(shareDir, folder)), true);
+
+	const audio = Buffer.alloc(300_000, 3);
+	writeFileSync(path.join(audioDir, '1-abc.mp3'), audio);
+	const old = new Date(Date.now() - 45 * 86400000).toISOString();
+	const insert = db.prepare(`INSERT INTO entries (gmail_id, title, entry_date, scripture, summary, body, source_from, source_subject, received_at, audio_file, audio_bytes, audio_sha256, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+	insert.run('m1', 'Grace: "enough" & more; É', old.slice(0, 10), 'John 1:16', 'A summary.', 'First paragraph.\n\nSecond paragraph.', 'a@example.org', 'Subject', old, '1-abc.mp3', audio.length, 'x', now(), now());
+	insert.run('m2', 'Recent', null, null, '', 'Stays here.', null, null, now(), null, null, null, now(), now());
+
+	assert.equal(await archiver.runOnce(), 1);
+	const [y, m] = [old.slice(0, 4), old.slice(5, 7)];
+	const base = path.join(shareDir, folder, y, m, `${old.slice(0, 10)}_1_Grace-enough-more-E`);
+	assert.deepEqual(readFileSync(base + '.mp3'), audio);
+	assert.match(readFileSync(base + '.txt', 'utf8'), /^Grace: "enough" & more; É\n.*\nJohn 1:16\n\nSummary: A summary\.\n\nFirst paragraph\.\n\nSecond paragraph\./s);
+
+	const rows = db.prepare('SELECT id, body, audio_file, archived_at IS NOT NULL AS archived, archive_path FROM entries ORDER BY id').all();
+	assert.deepEqual(rows.map((r) => [r.body, r.audio_file, r.archived]), [['', null, 1], ['Stays here.', null, 0]]);
+	assert.equal(rows[0].archive_path, `${folder}/${y}/${m}/${old.slice(0, 10)}_1_Grace-enough-more-E.txt`);
+	assert.equal(existsSync(path.join(audioDir, '1-abc.mp3')), false);
+	assert.equal(await archiver.runOnce(), 0);
+});

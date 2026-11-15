@@ -1,9 +1,10 @@
 # Devotion
 
 A small self-hosted server that reads devotional emails from a Gmail inbox,
-turns each one into a clean text entry with Claude, and narrates it to an MP3.
-A companion Android app syncs the entries and keeps text and audio on the
-phone for offline reading and listening.
+turns each one into a clean text entry with a short summary (Claude), and
+narrates it to an MP3. A companion Android app syncs the entries and keeps
+text and audio on the phone for offline reading and listening, with
+per-person highlights and notes and downloadable Bible versions.
 
 ```
 Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entries
@@ -36,8 +37,13 @@ Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entri
    - **Gmail**: the OAuth client and the keywords (see below).
    - **Reading the emails**: your Anthropic API key.
    - **Audio**: works as installed (the Piper voice runs inside the container).
-     An OpenAI-compatible speech API can be used instead.
-   - **Android app**: shows the address and token to type into the app.
+     Choose among several voices (others are downloaded when chosen) and a
+     speaking pace; an OpenAI-compatible speech API can be used instead.
+   - **Android app**: shows the address to type into the app, and the people
+     who have connected.
+   - **Bible versions**: which public-domain translations the server stores
+     for the app to download.
+   - **Archive**: the network share older entries are moved to.
    - **Updates**, **Admin password**, and a light/dark theme switch at the top.
 
 To keep the data on the host instead of inside the container, bind-mount a
@@ -96,13 +102,46 @@ entries (title, date, scripture reference, one-line summary, full text) and
 leaves out the newsletter material around them; an email with no devotion in
 it creates nothing. The *Emails read* table shows what happened to each one.
 
+### Archive: keeping only the last month on the server
+
+Under **Archive**, enter an SMB share (`//server/share`), a folder, and a
+user that may write there, then press *Test the share*. From then on, after
+each mail check, entries older than the set number of days (30 by default,
+counted from when the email arrived) are copied to the share as
+`<folder>/<year>/<month>/<date>_<id>_<title>.txt` and `.mp3`. Only when the
+share lists both files at their full size does the server drop the text and
+audio; it keeps the title, date, scripture reference and summary. Phones keep
+whatever they had already downloaded. Until a share is set, nothing is moved
+or removed.
+
+The share is written with `smbclient`, so nothing has to be mounted in the
+container.
+
+### Bible versions
+
+Under **Bible versions**, *Add* downloads a translation to the server; the
+app can then download it for offline reading. The list holds public-domain
+translations only (King James, American Standard, Young's Literal, Bible in
+Basic English, Webster, Geneva, American King James, and the Spanish
+Reina-Valera 1909); modern copyrighted translations are not included. Texts
+come from [scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases)
+at a fixed commit and are checked against a pinned checksum.
+
 ## The Android app
 
-Install the APK from the release page, open **Settings**, and enter the
-server address and API token shown on the admin page. The app syncs on start
-and on refresh, stores entries and audio on the phone, and works offline with
-what it has. Settings also has the theme (system, light, dark) and
-**Check for updates**.
+Install the APK from the release page and type in the server's address (just
+the IP address is enough). There is no password or token: the app asks each
+new person for their name and keeps their highlights and notes under that
+profile, on the server, so they follow the person to another device. Because
+there is no login, anyone on the network who knows the address can read the
+entries and pick any profile: keep the server on your home network and don't
+forward its port to the internet.
+
+In an entry, tap a sentence to highlight it or attach a comment. The player
+has a speed setting; Settings also has the theme (system, light, dark), the
+profile, and **Check for updates**. The Bible screen downloads versions from
+the server and opens the entry's scripture reference. The app syncs on start
+and on refresh and works offline with what it has.
 
 ## Updates
 
@@ -158,14 +197,18 @@ python3 deploy/lxc-template/check-template.py dist/debian-13-devotion_v0.0.0-dev
 
 ### The app's API
 
-All but `health` need `Authorization: Bearer <token>`.
+No authentication; meant for a home network.
 
 | | |
 |---|---|
 | `GET /api/health` | `{"ok":true,"version":"…"}` |
-| `GET /api/entries` | All entries, with `server_time`. |
+| `GET /api/entries` | All entries, with `server_time`. Archived ones have `"archived":true` and no body or audio. |
 | `GET /api/entries?since=<server_time>` | Entries changed since then; deleted ones come back with `"deleted":true`. |
 | `GET /api/entries/<id>/audio` | The MP3. |
+| `GET` / `POST /api/profiles` | List people; create one from `{"name":"…"}` (an existing name returns that profile). |
+| `GET /api/profiles/<id>/annotations[?since=]` | That person's highlights and notes. |
+| `PUT /api/profiles/<id>/annotations/<uuid>` | Save one; the later `updated_at` wins. Delete with `"deleted":true`. |
+| `GET /api/bibles`, `GET /api/bibles/<id>` | Bible versions on the server, and one version's text. |
 
 ### Server settings
 

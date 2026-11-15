@@ -2,6 +2,7 @@
 // + session cookie) and Google's OAuth callback.
 import http from 'node:http';
 import { createReadStream, readFileSync } from 'node:fs';
+import { createGzip } from 'node:zlib';
 import { stat } from 'node:fs/promises';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +41,7 @@ export function entryJson(row) {
 		title: row.title,
 		entry_date: row.entry_date,
 		scripture: row.scripture,
-		summary: row.summary,
+		summary: row.summary ?? '',
 		body: row.body,
 		has_audio: Boolean(row.audio_file),
 		audio_bytes: row.audio_bytes ?? 0,
@@ -49,13 +50,35 @@ export function entryJson(row) {
 		source_subject: row.source_subject,
 		created_at: row.created_at,
 		updated_at: row.updated_at,
+		archived: Boolean(row.archived_at),
 		deleted: Boolean(row.deleted_at),
 	};
 }
 
-export function createServer({ config, db, settings, gmail, pipeline, tts, updater, audioDir, log = console }) {
+const COLORS = new Set(['yellow', 'green', 'blue', 'pink', 'none']);
+
+export function annotationJson(row) {
+	return { id: row.id, entry_id: row.entry_id, start: row.start, end: row.end, color: row.color, comment: row.comment, updated_at: row.updated_at, deleted: Boolean(row.deleted) };
+}
+
+/** Checks an annotation sent by the app; returns it cleaned or throws. */
+export function parseAnnotation(id, body) {
+	const bad = (what) => Object.assign(new Error(`The annotation's ${what} is not valid.`), { status: 400 });
+	if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) throw bad('id');
+	const int = (v) => Number.isInteger(v) && v >= 0 && v <= 10_000_000;
+	if (!Number.isInteger(body.entry_id) || body.entry_id < 1) throw bad('entry_id');
+	if (!int(body.start) || !int(body.end) || body.end < body.start) throw bad('range');
+	if (!COLORS.has(body.color)) throw bad('color');
+	if (typeof body.comment !== 'string' || body.comment.length > 20_000) throw bad('comment');
+	const time = typeof body.updated_at === 'string' ? Date.parse(body.updated_at) : NaN;
+	if (Number.isNaN(time)) throw bad('updated_at');
+	return { id, entry_id: body.entry_id, start: body.start, end: body.end, color: body.color, comment: body.comment, updated_at: new Date(time).toISOString(), deleted: body.deleted === true ? 1 : 0 };
+}
+
+export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir, log = console }) {
 	const sessions = new Map(); // sid -> expiry
 	let loginFailures = 0;
+	let lastBackgroundError = null; // shown once by the admin page, then cleared
 
 	const send = (res, status, body, headers = {}) => {
 		const data = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
@@ -120,22 +143,24 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 			throw new HttpError(401, 'Log in first.');
 		}
 	};
-	const requireApp = (req) => {
-		const token = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '')?.[1];
-		if (!token || !sameSecret(token, settings.appToken())) throw new HttpError(401, 'Missing or wrong API token.');
-	};
-
-	const adminState = () => ({
+	const adminState = async () => ({
+		voices: await voices.list(),
+		background_error: (() => { const e = lastBackgroundError; lastBackgroundError = null; return e; })(),
+		...adminStateSync(),
+	});
+	const adminStateSync = () => ({
 		version: config.version,
 		settings: settings.publicView(),
-		app_token: settings.appToken(),
 		gmail: { configured: gmail.configured(), connected: gmail.connected(), email: settings.get('google_email'), redirect_uri: gmail.redirectUri() },
 		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady() },
 		can_install_updates: updater.canInstall(),
 		password_fixed: Boolean(config.adminPassword),
-		entries: db.prepare('SELECT id, title, entry_date, scripture, audio_file, audio_bytes, audio_error, source_subject, created_at FROM entries WHERE deleted_at IS NULL ORDER BY COALESCE(entry_date, created_at) DESC, id DESC LIMIT 100').all()
+		entries: db.prepare('SELECT id, title, entry_date, scripture, audio_file, audio_bytes, audio_error, source_subject, created_at FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY COALESCE(entry_date, created_at) DESC, id DESC LIMIT 100').all()
 			.map((e) => ({ ...e, has_audio: Boolean(e.audio_file), audio_file: undefined })),
 		messages: db.prepare('SELECT * FROM messages ORDER BY processed_at DESC LIMIT 30').all(),
+		profiles: db.prepare(`SELECT p.id, p.name, p.created_at, (SELECT COUNT(*) FROM annotations a WHERE a.profile_id = p.id AND a.deleted = 0) AS notes FROM profiles p ORDER BY p.name`).all(),
+		bibles: bibles.list(),
+		archive: { ...archiver.status, configured: archiver.configured(), running: archiver.running, waiting: archiver.due().length, archived_total: db.prepare('SELECT COUNT(*) AS n FROM entries WHERE archived_at IS NOT NULL AND deleted_at IS NULL').get().n },
 	});
 
 	const routes = [];
@@ -145,7 +170,6 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	route('GET', /^\/api\/health$/, (req, res) => send(res, 200, { ok: true, version: config.version }));
 
 	route('GET', /^\/api\/entries$/, (req, res, m, url) => {
-		requireApp(req);
 		const serverTime = new Date().toISOString();
 		const since = url.searchParams.get('since');
 		let rows;
@@ -160,21 +184,89 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	});
 
 	route('GET', /^\/api\/entries\/(\d+)$/, (req, res, m) => {
-		requireApp(req);
 		const row = db.prepare('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL').get(Number(m[1]));
 		if (!row) throw new HttpError(404, 'No such entry.');
 		send(res, 200, entryJson(row));
 	});
 
 	route('GET', /^\/api\/entries\/(\d+)\/audio$/, async (req, res, m) => {
-		requireApp(req);
-		const row = db.prepare('SELECT audio_file, audio_sha256 FROM entries WHERE id = ? AND deleted_at IS NULL').get(Number(m[1]));
+		const row = db.prepare('SELECT audio_file, audio_sha256 FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(Number(m[1]));
 		if (!row?.audio_file) throw new HttpError(404, 'This entry has no audio yet.');
 		const file = path.join(audioDir, path.basename(row.audio_file));
 		const info = await stat(file).catch(() => null);
 		if (!info) throw new HttpError(404, 'The audio file is missing on the server.');
 		res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': info.size, etag: `"${row.audio_sha256}"`, 'cache-control': 'private, max-age=31536000, immutable' });
 		createReadStream(file).on('error', () => res.destroy()).pipe(res);
+	});
+
+	// Profiles: who is reading. There is no login on the app's side; a profile
+	// is just a name that notes and highlights are kept under.
+	const profileJson = (p) => ({ id: p.id, name: p.name, created_at: p.created_at });
+	const requireProfile = (id) => {
+		const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(Number(id));
+		if (!profile) throw new HttpError(404, 'No such profile.');
+		return profile;
+	};
+
+	route('GET', /^\/api\/profiles$/, (req, res) => {
+		send(res, 200, { profiles: db.prepare('SELECT * FROM profiles ORDER BY name').all().map(profileJson) });
+	});
+
+	route('POST', /^\/api\/profiles$/, async (req, res) => {
+		const body = await readJson(req);
+		const name = typeof body.name === 'string' ? body.name.replace(/\s+/g, ' ').trim() : '';
+		if (!name) throw new HttpError(400, 'Enter a name.');
+		if (name.length > 60) throw new HttpError(400, 'That name is too long.');
+		const key = name.toLowerCase();
+		const existing = db.prepare('SELECT * FROM profiles WHERE name_key = ?').get(key);
+		if (existing) return send(res, 200, { ...profileJson(existing), existing: true });
+		if (db.prepare('SELECT COUNT(*) AS n FROM profiles').get().n >= 200) throw new HttpError(400, 'There are too many profiles on this server; remove some on its admin page.');
+		const info = db.prepare('INSERT INTO profiles (name, name_key, created_at) VALUES (?, ?, ?)').run(name, key, new Date().toISOString());
+		send(res, 201, { ...profileJson(requireProfile(info.lastInsertRowid)), existing: false });
+	});
+
+	route('GET', /^\/api\/profiles\/(\d+)\/annotations$/, (req, res, m, url) => {
+		const profile = requireProfile(m[1]);
+		const serverTime = new Date().toISOString();
+		const since = url.searchParams.get('since');
+		if (since && Number.isNaN(Date.parse(since))) throw new HttpError(400, '"since" is not a timestamp.');
+		const rows = since
+			? db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND server_updated_at > ? ORDER BY server_updated_at').all(profile.id, new Date(since).toISOString())
+			: db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND deleted = 0 ORDER BY entry_id, start').all(profile.id);
+		send(res, 200, { annotations: rows.map(annotationJson), server_time: serverTime });
+	});
+
+	route('PUT', /^\/api\/profiles\/(\d+)\/annotations\/([^/]+)$/, async (req, res, m) => {
+		const profile = requireProfile(m[1]);
+		const incoming = parseAnnotation(m[2], await readJson(req));
+		const stored = db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND id = ?').get(profile.id, incoming.id);
+		// The later edit wins, so two devices on one profile can't undo each other with stale data.
+		if (!stored || incoming.updated_at >= stored.updated_at) {
+			db.prepare(`INSERT INTO annotations (profile_id, id, entry_id, start, end, color, comment, updated_at, deleted, server_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(profile_id, id) DO UPDATE SET entry_id = excluded.entry_id, start = excluded.start, end = excluded.end, color = excluded.color,
+					comment = excluded.comment, updated_at = excluded.updated_at, deleted = excluded.deleted, server_updated_at = excluded.server_updated_at`)
+				.run(profile.id, incoming.id, incoming.entry_id, incoming.start, incoming.end, incoming.color, incoming.comment, incoming.updated_at, incoming.deleted, new Date().toISOString());
+		}
+		send(res, 200, annotationJson(db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND id = ?').get(profile.id, incoming.id)));
+	});
+
+	// Bible versions stored on this server, for the app to download.
+	route('GET', /^\/api\/bibles$/, (req, res) => send(res, 200, { bibles: bibles.installed() }));
+
+	route('GET', /^\/api\/bibles\/([a-z0-9]+)$/, async (req, res, m) => {
+		const bible = bibles.get(m[1]);
+		const info = bible && (await stat(bibles.file(bible.id)).catch(() => null));
+		if (!info) throw new HttpError(404, 'This Bible version is not on the server.');
+		const headers = { 'content-type': 'application/json; charset=utf-8', etag: `"${bible.sha256}"`, 'cache-control': 'private, max-age=86400' };
+		const stream = createReadStream(bibles.file(bible.id)).on('error', () => res.destroy());
+		// Several megabytes of text: compressed when the client can take it.
+		if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+			res.writeHead(200, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' });
+			stream.pipe(createGzip()).pipe(res);
+		} else {
+			res.writeHead(200, { ...headers, 'content-length': info.size });
+			stream.pipe(res);
+		}
 	});
 
 	// --- Admin ------------------------------------------------------------------
@@ -229,22 +321,15 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		send(res, 200, { ok: true }, { 'set-cookie': 'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
 	});
 
-	route('GET', /^\/admin\/api\/state$/, (req, res) => {
+	route('GET', /^\/admin\/api\/state$/, async (req, res) => {
 		requireAdmin(req);
-		send(res, 200, adminState());
+		send(res, 200, await adminState());
 	});
 
 	route('POST', /^\/admin\/api\/settings$/, async (req, res) => {
 		requireAdmin(req);
 		settings.applyForm(await readJson(req));
-		send(res, 200, adminState());
-	});
-
-	route('POST', /^\/admin\/api\/token\/rotate$/, async (req, res) => {
-		requireAdmin(req);
-		await readJson(req);
-		settings.rotateAppToken();
-		send(res, 200, adminState());
+		send(res, 200, await adminState());
 	});
 
 	route('POST', /^\/admin\/api\/oauth\/start$/, async (req, res) => {
@@ -272,7 +357,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		requireAdmin(req);
 		await readJson(req);
 		gmail.disconnect();
-		send(res, 200, adminState());
+		send(res, 200, await adminState());
 	});
 
 	// Google's redirect. No session is needed (the browser arrives from another
@@ -311,7 +396,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		requireAdmin(req);
 		await readJson(req);
 		if (!(await pipeline.deleteEntry(Number(m[1])))) throw new HttpError(404, 'No such entry.');
-		send(res, 200, adminState());
+		send(res, 200, await adminState());
 	});
 
 	route('POST', /^\/admin\/api\/entries\/(\d+)\/audio$/, async (req, res, m) => {
@@ -330,6 +415,51 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		await readJson(req);
 		pipeline.retryMessage(m[1]);
 		pipeline.runOnce().catch(() => {});
+		send(res, 202, { ok: true });
+	});
+
+	route('POST', /^\/admin\/api\/profiles\/(\d+)\/delete$/, async (req, res, m) => {
+		requireAdmin(req);
+		await readJson(req);
+		db.prepare('DELETE FROM annotations WHERE profile_id = ?').run(Number(m[1]));
+		db.prepare('DELETE FROM profiles WHERE id = ?').run(Number(m[1]));
+		send(res, 200, await adminState());
+	});
+
+	// Downloads run in the background; the page polls the state for progress.
+	const background = (promise, what) => promise.catch((err) => {
+		log.error(`${what}: ${err.message}`);
+		lastBackgroundError = `${what}: ${err.message}`;
+	});
+	route('POST', /^\/admin\/api\/voices\/([A-Za-z0-9_-]+)\/(select|delete)$/, async (req, res, m) => {
+		requireAdmin(req);
+		await readJson(req);
+		if (m[2] === 'delete') await voices.remove(m[1]);
+		else if ((await voices.list()).find((v) => v.id === m[1])?.installed) await voices.select(m[1]);
+		else background(voices.select(m[1]), 'Voice download');
+		send(res, 202, await adminState());
+	});
+
+	route('POST', /^\/admin\/api\/bibles\/([a-z0-9]+)\/(install|delete)$/, async (req, res, m) => {
+		requireAdmin(req);
+		await readJson(req);
+		if (m[2] === 'delete') await bibles.remove(m[1]);
+		else if (!bibles.list().some((b) => b.id === m[1])) throw new HttpError(404, 'No such Bible version.');
+		else background(bibles.install(m[1]), 'Bible download');
+		send(res, 202, await adminState());
+	});
+
+	route('POST', /^\/admin\/api\/archive\/test$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		send(res, 200, await archiver.test());
+	});
+
+	route('POST', /^\/admin\/api\/archive\/run$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		if (!archiver.configured()) throw new HttpError(409, 'Enter and save the share first.');
+		background(archiver.runOnce(), 'Archive');
 		send(res, 202, { ok: true });
 	});
 
@@ -362,9 +492,11 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 			throw new HttpError(routes.some((r) => r.pattern.test(url.pathname)) ? 405 : 404, 'Not found.');
 		} catch (err) {
 			const status = err.status && err.status >= 400 && err.status < 600 ? err.status : err.name === 'GmailError' ? 400 : 500;
-			if (status >= 500 && !['UpdateError'].includes(err.name)) log.error(`${req.method} ${url.pathname}:`, err.stack || err.message);
+			// Errors this server raises on purpose carry a message meant for the person at the page.
+			const ours = ['UpdateError', 'ArchiveError', 'VoiceError', 'BibleError', 'GmailError'].includes(err.name) || err instanceof HttpError;
+			if (status >= 500 && !ours) log.error(`${req.method} ${url.pathname}:`, err.stack || err.message);
 			if (res.headersSent) return res.destroy();
-			send(res, status, { error: status === 500 ? 'Something went wrong on the server; see its log.' : err.message });
+			send(res, status, { error: status === 500 && !ours ? 'Something went wrong on the server; see its log.' : err.message });
 		}
 	});
 }

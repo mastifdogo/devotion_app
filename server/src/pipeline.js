@@ -34,8 +34,8 @@ export function matchKeyword(message, keywords) {
 }
 
 export class Pipeline {
-	constructor({ db, settings, gmail, extractor, tts, audioDir, log = console }) {
-		Object.assign(this, { db, settings, gmail, extractor, tts, audioDir, log });
+	constructor({ db, settings, gmail, extractor, tts, audioDir, archiver = null, log = console }) {
+		Object.assign(this, { db, settings, gmail, extractor, tts, audioDir, archiver, log });
 		this.running = false;
 		this.timer = null;
 		this.status = { last_run: null, last_error: null, last_result: null, running: false };
@@ -88,6 +88,9 @@ export class Pipeline {
 				if (!ok) result.errors++;
 			}
 			result.audio = await this.fillAudio();
+			// Last, and never a reason for the mail run to fail: an unreachable
+			// share is reported in the archive's own status.
+			if (this.archiver) await this.archiver.runOnce().catch(() => {});
 			result.entries = this.db.prepare('SELECT COUNT(*) AS n FROM entries WHERE deleted_at IS NULL').get().n;
 			this.status = { last_run: now(), last_error: null, last_result: result, running: false };
 			return result;
@@ -121,15 +124,15 @@ export class Pipeline {
 			}
 			if (message.text.length > MAX_EMAIL_CHARS) throw Object.assign(new Error(`The email is too long (${message.text.length} characters).`), { retryable: false });
 			const entries = await this.extractor.extract(message);
-			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, title, entry_date, scripture, summary, body, source_from, source_subject, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, title, entry_date, scripture, summary, body, source_from, source_subject, received_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 			this.db.exec('BEGIN');
 			try {
 				// A retry after a half-finished attempt must not leave duplicates.
 				this.db.prepare('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE gmail_id = ? AND deleted_at IS NULL').run(now(), now(), id);
 				entries.forEach((e, i) => {
 					const t = now();
-					insert.run(id, i, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, message.from, message.subject, t, t);
+					insert.run(id, i, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, message.from, message.subject, message.date, t, t);
 				});
 				record.run(id, message.subject, message.from, message.date, entries.length ? 'done' : 'skipped', entries.length ? null : 'No devotion found in this email.', attempts + 1, now());
 				this.db.exec('COMMIT');
@@ -152,7 +155,7 @@ export class Pipeline {
 	/** Makes audio for entries that have none yet. Returns how many were made. */
 	async fillAudio({ retryFailed = false } = {}) {
 		if (this.tts.notReady()) return 0;
-		const rows = this.db.prepare(`SELECT * FROM entries WHERE deleted_at IS NULL AND audio_file IS NULL ${retryFailed ? '' : 'AND audio_error IS NULL'} ORDER BY id`).all();
+		const rows = this.db.prepare(`SELECT * FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL AND audio_file IS NULL ${retryFailed ? '' : 'AND audio_error IS NULL'} ORDER BY id`).all();
 		let made = 0;
 		for (const entry of rows) if (await this.makeAudio(entry)) made++;
 		return made;

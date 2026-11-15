@@ -27,7 +27,7 @@ export const ENTRY_SCHEMA = {
 					title: { type: 'string', description: 'The devotion\'s own title; if it has none, a short faithful one.' },
 					entry_date: nullableString('The date the devotion is for, as YYYY-MM-DD, or null if the email does not say.'),
 					scripture: nullableString('The scripture reference(s) the devotion is built on, e.g. "John 3:16-17; Psalm 23", or null.'),
-					summary: nullableString('One sentence saying what the devotion is about, or null if it is too short to need one.'),
+					summary: { type: 'string', description: 'A summary of the devotion in two or three sentences, in your own words: its main point and what it asks of the reader. Plain text.' },
 					body: { type: 'string', description: 'The full text of the devotion as plain text, paragraphs separated by a blank line.' },
 				},
 			},
@@ -39,7 +39,7 @@ const SYSTEM = `You prepare devotional emails for a reading and listening app. E
 
 Your job is to return the devotion(s) the email contains. The body you return is shown on screen and also read aloud by a text-to-speech voice, which shapes what a good body looks like:
 
-- Keep the author's words. Reproduce the devotion's text in full and in order; do not summarize, shorten, paraphrase or add commentary. Quoted scripture, the reflection, any prayer and any closing thought or question for reflection all belong.
+- Keep the author's words. In the body, reproduce the devotion's text in full and in order; do not summarize, shorten, paraphrase or add commentary there. (The separate summary field is where your own short summary goes: readers see it in a list before they open the devotion.) Quoted scripture, the reflection, any prayer and any closing thought or question for reflection all belong.
 - Leave out everything that is not the devotion: the surrounding newsletter material listed above, and bare URLs, image captions and "read more" stubs.
 - Write plain text. Paragraphs separated by a blank line, no markdown, no HTML, no bullet symbols. Repair artifacts of the conversion such as words broken across lines, stray spacing and repeated headings.
 - If a section has a heading such as "Prayer" or "Reflection", keep it as its own short line so a listener hears the transition.
@@ -120,7 +120,7 @@ export function normalizeEntries(parsed) {
 			title: clean(e.title) || 'Untitled',
 			entry_date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
 			scripture: clean(e.scripture),
-			summary: clean(e.summary),
+			summary: clean(e.summary) || '',
 			body: body.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n'),
 		});
 	}

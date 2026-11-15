@@ -28,6 +28,38 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: make test
 
+  smb-archive:
+    # The archive against a real SMB server, since smbclient's output is parsed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Start an SMB server with one share
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q samba smbclient >/dev/null
+          sudo useradd --no-create-home --shell /usr/sbin/nologin smbtest
+          printf 'test-Pass 1\ntest-Pass 1\n' | sudo smbpasswd -s -a smbtest
+          sudo mkdir -p /srv/devotion-share && sudo chown smbtest /srv/devotion-share && sudo chmod 0755 /srv/devotion-share
+          printf '[devotion]\n  path = /srv/devotion-share\n  read only = no\n  valid users = smbtest\n' | sudo tee -a /etc/samba/smb.conf >/dev/null
+          sudo systemctl restart smbd
+          smbclient --version
+      - name: Archive test
+        working-directory: server
+        env:
+          SMB_TEST_SHARE: //127.0.0.1/devotion
+          SMB_TEST_USER: smbtest
+          SMB_TEST_PASSWORD: test-Pass 1
+          SMB_TEST_DIR: /srv/devotion-share
+        run: |
+          npm ci --no-audit --no-fund
+          sudo chmod -R a+rX /srv/devotion-share
+          node --test test/smb.integration.test.js
+          sudo ls -lR /srv/devotion-share | head -30
+
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 30

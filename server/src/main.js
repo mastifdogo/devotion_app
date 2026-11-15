@@ -8,6 +8,9 @@ import { Extractor } from './extract.js';
 import { Tts } from './tts.js';
 import { Pipeline } from './pipeline.js';
 import { Updater } from './update.js';
+import { Voices } from './voices.js';
+import { Bibles } from './bibles.js';
+import { Archiver } from './archive.js';
 import { createServer } from './server.js';
 
 const config = loadConfig();
@@ -25,10 +28,13 @@ if (process.argv[2] === 'reset-admin-password') {
 const audioDir = path.join(config.dataDir, 'audio');
 const gmail = new Gmail({ settings, port: config.port });
 const extractor = new Extractor({ settings });
-const tts = new Tts({ settings, audioDir });
-const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir });
+const voices = new Voices({ settings, dataDir: config.dataDir });
+const bibles = new Bibles({ db, dataDir: config.dataDir });
+const tts = new Tts({ settings, audioDir, voices });
+const archiver = new Archiver({ db, settings, audioDir });
+const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver });
 const updater = new Updater({ config, settings });
-const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, audioDir });
+const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir });
 
 server.listen(config.port, config.host, () => {
 	console.log(`devotion-server ${config.version} listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);

@@ -83,8 +83,9 @@ function run(cmd, args, { input, timeoutMs = 15 * 60 * 1000 } = {}) {
 }
 
 export class Tts {
-	constructor({ settings, audioDir, fetchImpl = fetch, runImpl = run }) {
+	constructor({ settings, audioDir, voices = null, fetchImpl = fetch, runImpl = run }) {
 		this.settings = settings;
+		this.voices = voices;
 		this.audioDir = audioDir;
 		this.fetch = fetchImpl;
 		this.run = runImpl;
@@ -128,7 +129,10 @@ export class Tts {
 		const wav = outFile + '.wav';
 		// Piper speaks one line at a time; a paragraph per line keeps natural pauses.
 		const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean).join('\n') + '\n';
-		await this.run(this.settings.get('piper_bin'), ['--model', this.settings.get('piper_model'), '--sentence_silence', '0.35', '--output_file', wav], { input: lines });
+		const model = this.voices ? await this.voices.modelPath() : this.settings.get('piper_model');
+		// Piper stretches time: above 1 is slower.
+		const length = { slow: '1.18', normal: '1.0', fast: '0.87' }[this.settings.get('tts_rate')] || '1.0';
+		await this.run(this.settings.get('piper_bin'), ['--model', model, '--length_scale', length, '--sentence_silence', '0.35', '--output_file', wav], { input: lines });
 		await stat(wav).catch(() => {
 			throw new TtsError('piper finished without writing audio.');
 		});
@@ -142,7 +146,7 @@ export class Tts {
 			const res = await this.fetch(`${base}/audio/speech`, {
 				method: 'POST',
 				headers: { authorization: `Bearer ${this.settings.get('tts_openai_key')}`, 'content-type': 'application/json' },
-				body: JSON.stringify({ model: this.settings.get('tts_openai_model'), voice: this.settings.get('tts_openai_voice'), input: chunk, response_format: 'mp3' }),
+				body: JSON.stringify({ model: this.settings.get('tts_openai_model'), voice: this.settings.get('tts_openai_voice'), input: chunk, response_format: 'mp3', speed: { slow: 0.88, normal: 1, fast: 1.15 }[this.settings.get('tts_rate')] || 1 }),
 			});
 			if (!res.ok) {
 				const detail = await res.text().catch(() => '');

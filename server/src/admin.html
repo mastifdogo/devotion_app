@@ -113,8 +113,14 @@ th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
 		<option value="none">No audio</option>
 	</select>
 	<div data-for="piper">
-		<label for="piper_model">Piper voice model file</label><input id="piper_model" data-setting autocomplete="off">
+		<label>Voice (a voice not yet on the server is downloaded when you choose it, about 60 MB)</label>
+		<div class="scroll"><table id="voices"></table></div>
 	</div>
+	<label for="tts_rate">Speaking pace</label>
+	<select id="tts_rate" data-setting style="max-width:14rem">
+		<option value="slow">Slower</option><option value="normal">Normal</option><option value="fast">Faster</option>
+	</select>
+	<p class="small muted">A new voice or pace applies to audio made from now on. Use "Redo audio" on an entry to hear it on an existing one.</p>
 	<div data-for="openai" class="grid">
 		<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
 		<div><label for="tts_openai_key">API key</label><input id="tts_openai_key" data-setting data-secret type="password" autocomplete="off"></div>
@@ -126,9 +132,31 @@ th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
 
 <section>
 	<h2>Android app</h2>
-	<p class="small muted">Enter these in the app's settings.</p>
-	<table><tr><th>Server address</th><td class="mono" id="app-url"></td></tr><tr><th>API token</th><td class="mono" id="app-token"></td></tr></table>
-	<div class="row"><button class="plain" id="rotate">New token</button></div>
+	<p class="small muted">Type this address into the app. It asks each new person for their name; notes and highlights are kept per person. Anyone on your network who knows the address can read the entries, so don't expose this port to the internet.</p>
+	<table><tr><th>Server address</th><td class="mono" id="app-url"></td></tr></table>
+	<h2 style="margin-top:1rem">People</h2>
+	<div class="scroll"><table id="profiles"></table></div>
+</section>
+
+<section>
+	<h2>Bible versions</h2>
+	<p class="small muted">Versions stored here can be downloaded in the app. These are public-domain translations.</p>
+	<div class="scroll"><table id="bibles"></table></div>
+</section>
+
+<section>
+	<h2>Archive</h2>
+	<p class="small muted">Entries older than this are moved to a network share (a text file and the MP3 for each) and only their title, date and summary stay on the server. Phones keep what they have already downloaded. Nothing is moved until a share is set.</p>
+	<p id="archive-status" class="small"></p>
+	<div class="grid">
+		<div><label for="archive_days">Keep on the server for (days)</label><input id="archive_days" data-setting inputmode="numeric"></div>
+		<div><label for="smb_share">Share (SMB)</label><input id="smb_share" data-setting placeholder="//nas.local/backups" autocomplete="off"></div>
+		<div><label for="smb_folder">Folder in the share</label><input id="smb_folder" data-setting autocomplete="off"></div>
+		<div><label for="smb_username">User name</label><input id="smb_username" data-setting autocomplete="off"></div>
+		<div><label for="smb_password">Password</label><input id="smb_password" data-setting data-secret type="password" autocomplete="off"></div>
+		<div><label for="smb_domain">Domain or workgroup (optional)</label><input id="smb_domain" data-setting autocomplete="off"></div>
+	</div>
+	<div class="row"><button data-save>Save</button><button class="plain" id="archive-test">Test the share</button><button class="plain" id="archive-run">Archive now</button></div>
 </section>
 
 <section>
@@ -209,7 +237,42 @@ function render() {
 	$('redirect-uri').textContent = g.redirect_uri;
 	$('connect').textContent = g.connected ? 'Reconnect Gmail' : 'Connect Gmail';
 	$('disconnect').hidden = !g.connected;
-	$('app-url').textContent = location.origin; $('app-token').textContent = state.app_token;
+	$('app-url').textContent = location.origin;
+	if (state.background_error) toast(state.background_error);
+
+	const row = (cells) => { const tr = el('tr'); for (const c of cells) { const td = el('td'); td.append(c); tr.append(td); } return tr; };
+	const button = (label, fn) => { const b = el('button', label, 'plain small'); b.onclick = act(fn); return b; };
+	const post = (path) => async () => { state = await api(path, {}); render(); };
+
+	const vt = $('voices'); vt.replaceChildren();
+	for (const v of state.voices) {
+		const name = el('span', v.name); name.append(el('div', v.description, 'muted small'));
+		const status = v.downloading ? 'downloading…' : v.selected ? 'in use' : v.installed ? 'on the server' : '';
+		const actions = el('span');
+		if (!v.selected && !v.downloading) actions.append(button(v.installed ? 'Use' : 'Download and use', post(`/admin/api/voices/${v.id}/select`)));
+		if (v.installed && !v.built_in && !v.selected) actions.append(' ', button('Remove', post(`/admin/api/voices/${v.id}/delete`)));
+		vt.append(row([name, el('span', status, v.selected ? 'ok' : 'muted'), actions]));
+	}
+
+	const pt = $('profiles'); pt.replaceChildren();
+	if (!state.profiles.length) pt.append(el('caption', 'Nobody has connected with the app yet.', 'muted'));
+	for (const p of state.profiles) {
+		pt.append(row([p.name, el('span', p.notes + (p.notes === 1 ? ' note or highlight' : ' notes and highlights'), 'muted'),
+			button('Remove', async () => { if (confirm(`Remove ${p.name} and their notes and highlights?`)) { state = await api(`/admin/api/profiles/${p.id}/delete`, {}); render(); } })]));
+	}
+
+	const bt = $('bibles'); bt.replaceChildren();
+	for (const b of state.bibles) {
+		const status = b.downloading ? 'downloading…' : b.installed ? `on the server (${(b.bytes / 1048576).toFixed(1)} MB)` : '';
+		const action = b.downloading ? el('span') : b.installed ? button('Remove', post(`/admin/api/bibles/${b.id}/delete`)) : button('Add', post(`/admin/api/bibles/${b.id}/install`));
+		bt.append(row([b.name, el('span', status, b.installed ? 'ok' : 'muted'), action]));
+	}
+
+	const a = state.archive, as = $('archive-status');
+	as.className = 'small ' + (a.last_error ? 'bad' : 'muted');
+	as.textContent = !a.configured ? 'No share is set, so every entry stays on the server.'
+		: a.last_error ? 'The last archive run failed: ' + a.last_error
+		: `${a.archived_total} archived so far, ${a.waiting} waiting${a.running ? ' (archiving now…)' : ''}.` + (a.last_run ? ' Last run: ' + when(a.last_run) : '');
 
 	const et = $('entries'); et.replaceChildren();
 	if (!state.entries.length) et.append(el('caption', 'No entries yet.', 'muted'));
@@ -281,7 +344,8 @@ async function save() {
 }
 $('run').onclick = act(async () => { await api('/admin/api/run', {}); toast('Checking mail…'); setTimeout(() => load(false).catch(() => {}), 1500); });
 $('retry-audio').onclick = act(async () => { await api('/admin/api/audio/retry', {}); toast('Retrying audio…'); });
-$('rotate').onclick = act(async () => { if (confirm('Make a new token? The app stops syncing until you enter the new one.')) { state = await api('/admin/api/token/rotate', {}); render(); } });
+$('archive-test').onclick = act(async () => { await save(); const r = await api('/admin/api/archive/test', {}); toast('The share works. Entries will go to: ' + r.folder); });
+$('archive-run').onclick = act(async () => { await save(); await api('/admin/api/archive/run', {}); toast('Archiving…'); setTimeout(() => load(false).catch(() => {}), 2000); });
 $('connect').onclick = act(async () => {
 	await save();
 	const { url } = await api('/admin/api/oauth/start', {});
