@@ -92,10 +92,13 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_WALL_URL, "") ?: ""
         set(value) = prefs.edit().putString(KEY_WALL_URL, value).apply()
 
-    /** How visible the app wallpaper is, 0..1. */
-    var wallpaperStrength: Float
-        get() = prefs.getFloat(KEY_WALL_STRENGTH, 0.35f)
-        set(value) = prefs.edit().putFloat(KEY_WALL_STRENGTH, value).apply()
+    /**
+     * Opacity of the text window over the app wallpaper, 0.5..1 (default 1). The round-four
+     * "wallpaper_strength" key is no longer read.
+     */
+    var textWindowOpacity: Float
+        get() = prefs.getFloat(KEY_WINDOW_OPACITY, 1f)
+        set(value) = prefs.edit().putFloat(KEY_WINDOW_OPACITY, value).apply()
 
     /** Topic chip selected on the Wallpapers screen ("" = All). */
     var wallTopic: String
@@ -130,7 +133,7 @@ class SettingsStore(context: Context) {
         const val KEY_ENTRY_TAB = "entry_tab"
         const val KEY_WALL_ID = "wallpaper_id"
         const val KEY_WALL_URL = "wallpaper_url"
-        const val KEY_WALL_STRENGTH = "wallpaper_strength"
+        const val KEY_WINDOW_OPACITY = "text_window_opacity"
         const val KEY_WALL_TOPIC = "wall_topic"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"

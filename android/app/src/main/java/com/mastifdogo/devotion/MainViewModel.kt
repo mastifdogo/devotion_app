@@ -44,6 +44,7 @@ import com.mastifdogo.devotion.logic.ServerWallpaper
 import com.mastifdogo.devotion.logic.TextLogic
 import com.mastifdogo.devotion.logic.WallpaperLibrary
 import com.mastifdogo.devotion.logic.WallpaperLogic
+import com.mastifdogo.devotion.logic.WindowLogic
 import com.mastifdogo.devotion.ui.ThemeMode
 import com.mastifdogo.devotion.update.ReleaseAsset
 import com.mastifdogo.devotion.update.UpdateCheck
@@ -1299,8 +1300,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var appWallpaperId: String by mutableStateOf(settings.wallpaperId)
         private set
-    /** How visible the app wallpaper is behind the content, 0..1. */
-    var wallpaperStrength: Float by mutableStateOf(settings.wallpaperStrength.coerceIn(0f, 1f))
+    /** Opacity of the text window over the app wallpaper, 0.5..1. */
+    var windowOpacity: Float by mutableStateOf(WindowLogic.clampOpacity(settings.textWindowOpacity))
         private set
 
     private var wallJob: Job? = null
@@ -1420,10 +1421,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { withContext(Dispatchers.IO) { wallpaperStore.remove() } }
     }
 
-    fun updateWallpaperStrength(value: Float) {
-        val v = value.coerceIn(0f, 1f)
-        wallpaperStrength = v
-        settings.wallpaperStrength = v
+    fun updateWindowOpacity(value: Float) {
+        val v = WindowLogic.clampOpacity(value)
+        windowOpacity = v
+        settings.textWindowOpacity = v
     }
 
     private fun loadAppWallpaper() {

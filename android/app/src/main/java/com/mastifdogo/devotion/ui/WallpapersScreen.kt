@@ -80,11 +80,7 @@ fun WallpapersScreen(vm: MainViewModel) {
             )
         },
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
+        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
             val library = vm.wallLibrary
             when {
                 preview != null -> WallpaperPreview(vm, preview)

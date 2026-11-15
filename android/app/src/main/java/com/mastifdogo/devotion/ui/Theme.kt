@@ -8,9 +8,20 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.mastifdogo.devotion.logic.WindowLogic
 
 private val LightColors = lightColorScheme(
     primary = Color(0xFF2F4A6D),
@@ -92,19 +103,48 @@ fun highlightColor(name: String?, dark: Boolean): Color? = when (name) {
 fun screenContainerColor(hasWallpaper: Boolean): Color =
     if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.background
 
-/** Top bars and the tab row: translucent over the app wallpaper. */
+/** Top app bar over the wallpaper: lightly translucent so its title and icons stay legible. */
 @Composable
 fun barContainerColor(hasWallpaper: Boolean): Color =
-    if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.8f) else MaterialTheme.colorScheme.surface
+    if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surface
+
+/** List items, the player bar and similar cards inside the text window: opaque, so they stay distinct. */
+@Composable
+fun windowCardColor(): Color = MaterialTheme.colorScheme.surfaceContainer
 
 /**
- * Behind reading text (entry body, Bible verses): at least 88% opaque over the app wallpaper,
- * whatever the strength setting; nothing when there is no wallpaper.
+ * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),
+ * inset from the sides and bottom (more, and at most 720dp wide, on screens from 600dp), so the
+ * wallpaper frames it. Without one: just the content, as before wallpapers existed.
+ * [modifier] should carry the Scaffold padding (which already includes the system bar insets).
  */
 @Composable
-fun readingCardColor(hasWallpaper: Boolean, strength: Float): Color =
-    if (hasWallpaper) {
-        MaterialTheme.colorScheme.surface.copy(alpha = maxOf(0.88f, 1f - strength))
-    } else {
-        Color.Transparent
+fun ContentWindow(
+    hasWallpaper: Boolean,
+    opacity: Float,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    if (!hasWallpaper) {
+        Box(modifier = modifier.fillMaxSize()) { content() }
+        return
     }
+    val layout = WindowLogic.layoutFor(LocalConfiguration.current.screenWidthDp)
+    val inset = layout.insetDp.dp
+    val maxWidth = layout.maxWidthDp
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(start = inset, end = inset, bottom = inset),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = WindowLogic.clampOpacity(opacity)),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = RoundedCornerShape(16.dp),
+            modifier = (if (maxWidth != null) Modifier.widthIn(max = maxWidth.dp) else Modifier).fillMaxSize(),
+        ) {
+            content()
+        }
+    }
+}

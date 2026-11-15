@@ -58,10 +58,10 @@ import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.BuildConfig
 import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.Screen
+import com.mastifdogo.devotion.logic.WindowLogic
 import com.mastifdogo.devotion.UpdateUi
 import com.mastifdogo.devotion.update.Updater
 import java.io.File
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,10 +82,10 @@ fun SettingsScreen(vm: MainViewModel) {
             )
         },
     ) { padding ->
+        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -108,6 +108,7 @@ fun SettingsScreen(vm: MainViewModel) {
             SectionDivider()
             UpdateSection(vm)
             Spacer(modifier = Modifier.height(24.dp))
+        }
         }
     }
 }
@@ -305,18 +306,26 @@ private fun WallpaperSection(vm: MainViewModel) {
         }
         Text("›", style = MaterialTheme.typography.titleLarge)
     }
-    if (current != null) {
-        Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(8.dp))
+    // The text window over the wallpaper: 50% (wallpaper shows through) to 100% (opaque).
+    Text(
+        text = "Text window opacity: ${WindowLogic.opacityLabel(vm.windowOpacity)}",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = vm.windowOpacity,
+        onValueChange = { vm.updateWindowOpacity(it) },
+        valueRange = WindowLogic.MIN_OPACITY..WindowLogic.MAX_OPACITY,
+        enabled = current != null,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (current == null) {
         Text(
-            text = "Wallpaper strength: ${(vm.wallpaperStrength * 100f).roundToInt()}%",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "Choose a wallpaper first",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Slider(
-            value = vm.wallpaperStrength,
-            onValueChange = { vm.updateWallpaperStrength(it) },
-            valueRange = 0f..1f,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    } else {
         OutlinedButton(onClick = { vm.removeAppWallpaper() }) { Text("Remove app wallpaper") }
     }
 }

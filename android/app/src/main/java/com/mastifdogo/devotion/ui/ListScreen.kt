@@ -1,6 +1,8 @@
 package com.mastifdogo.devotion.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +35,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.MainViewModel
@@ -72,36 +76,35 @@ fun ListScreen(vm: MainViewModel) {
             )
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            val tabs = EntryTab.entries
-            val selected = vm.selectedTab
-            TabRow(
-                selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
-                containerColor = barContainerColor(hasWallpaper),
-            ) {
-                for (tab in tabs) {
-                    Tab(
-                        selected = tab == selected,
-                        onClick = { vm.selectTab(tab) },
-                        text = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    )
+        // The tab row and each tab's content live in the text window over the wallpaper.
+        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                val tabs = EntryTab.entries
+                val selected = vm.selectedTab
+                TabRow(
+                    selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
+                    containerColor = if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.surface,
+                ) {
+                    for (tab in tabs) {
+                        Tab(
+                            selected = tab == selected,
+                            onClick = { vm.selectTab(tab) },
+                            text = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                    }
                 }
-            }
-            if (selected == EntryTab.BIBLE) {
-                BibleTab(vm, Modifier.fillMaxSize())
-            } else {
-                EntriesTab(vm, selected)
+                if (selected == EntryTab.BIBLE) {
+                    BibleTab(vm, Modifier.fillMaxSize())
+                } else {
+                    EntriesTab(vm, selected, cards = hasWallpaper)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun EntriesTab(vm: MainViewModel, tab: EntryTab) {
+private fun EntriesTab(vm: MainViewModel, tab: EntryTab, cards: Boolean) {
     val all = vm.entries
     val entries = remember(all, tab) { EntryKinds.entriesFor(tab, all) }
     val locale = Locale.getDefault()
@@ -115,6 +118,7 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(entries, key = { it.id }) { entry ->
                     EntryRow(
+                        card = cards,
                         entry = entry,
                         heading = EntryKinds.heading(entry, locale, zone),
                         audioCached = vm.isAudioCached(entry),
@@ -122,7 +126,7 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab) {
                         downloading = vm.isAudioDownloading(entry),
                         onClick = { vm.open(Screen.Detail(entry.id)) },
                     )
-                    HorizontalDivider()
+                    if (!cards) HorizontalDivider()
                 }
             }
         }
@@ -199,6 +203,7 @@ private fun EmptyState(vm: MainViewModel, tab: EntryTab) {
  */
 @Composable
 private fun EntryRow(
+    card: Boolean,
     entry: Entry,
     heading: String?,
     audioCached: Boolean,
@@ -210,6 +215,17 @@ private fun EntryRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // In the text window each item is an opaque card so it stays distinct at any opacity.
+            .then(
+                if (card) {
+                    Modifier
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(windowCardColor())
+                } else {
+                    Modifier
+                },
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

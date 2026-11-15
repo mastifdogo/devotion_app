@@ -93,23 +93,18 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
             )
         },
-        bottomBar = { PlayerBar(vm, entry) },
+        // Without a wallpaper the player is the bottom bar; with one it moves into the text window.
+        bottomBar = { if (!hasWallpaper) PlayerBar(vm, entry, inWindow = false) },
     ) { padding ->
-        // Over an app wallpaper the whole text sits on a card that is at least 88% opaque.
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-        ) {
-            Surface(
-                color = readingCardColor(hasWallpaper, vm.wallpaperStrength),
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                ) {
                     DetailContent(
                         vm = vm,
                         entry = entry,
@@ -118,6 +113,7 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
                         onEdit = { target -> editing = target },
                     )
                 }
+                if (hasWallpaper) PlayerBar(vm, entry, inWindow = true)
             }
         }
     }
@@ -434,12 +430,21 @@ private fun NotesSection(
 
 // ---- player -------------------------------------------------------------------------------------
 
+/**
+ * The audio player. As the Scaffold's bottom bar it pads for the navigation bar itself; inside the
+ * text window ([inWindow]) the Scaffold padding already did, and it is an opaque card.
+ */
 @Composable
-private fun PlayerBar(vm: MainViewModel, entry: Entry) {
-    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
+    Surface(
+        color = if (inWindow) windowCardColor() else MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = if (inWindow) 0.dp else 3.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column(
             modifier = Modifier
-                .navigationBarsPadding()
+                .then(if (inWindow) Modifier else Modifier.navigationBarsPadding())
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {

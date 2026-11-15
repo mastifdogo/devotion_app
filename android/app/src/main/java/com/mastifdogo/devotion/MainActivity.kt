@@ -53,8 +53,8 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * The theme background, and over it the app wallpaper (if one is set) with a scrim of the
- * background colour whose opacity is 1 - strength. Screens are transparent where it shows.
+ * The theme background, and over it the app wallpaper (if one is set), fully visible. Screens
+ * then put their content in a rounded text window (see ContentWindow) so the wallpaper frames it.
  */
 @Composable
 private fun AppBackground(vm: MainViewModel, content: @Composable () -> Unit) {
@@ -71,11 +71,6 @@ private fun AppBackground(vm: MainViewModel, content: @Composable () -> Unit) {
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(background.copy(alpha = 1f - vm.wallpaperStrength)),
             )
         }
         content()
