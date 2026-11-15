@@ -28,6 +28,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -46,10 +47,14 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ListScreen(vm: MainViewModel) {
+    val hasWallpaper = vm.appWallpaper != null
     Scaffold(
+        containerColor = screenContainerColor(hasWallpaper),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text("Devotion") },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
                 actions = {
                     if (vm.syncing) {
                         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -74,7 +79,10 @@ fun ListScreen(vm: MainViewModel) {
         ) {
             val tabs = EntryTab.entries
             val selected = vm.selectedTab
-            TabRow(selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0)) {
+            TabRow(
+                selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
+                containerColor = barContainerColor(hasWallpaper),
+            ) {
                 for (tab in tabs) {
                     Tab(
                         selected = tab == selected,

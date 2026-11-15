@@ -326,7 +326,11 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
     val markColor = MaterialTheme.colorScheme.secondaryContainer
     val markTextColor = MaterialTheme.colorScheme.onSecondaryContainer
     Column(modifier = Modifier.fillMaxSize()) {
-        SelectionContainer(modifier = Modifier.weight(1f)) {
+        SelectionContainer(
+            modifier = Modifier
+                .weight(1f)
+                .background(readingCardColor(vm.appWallpaper != null, vm.wallpaperStrength)),
+        ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),

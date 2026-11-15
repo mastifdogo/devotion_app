@@ -84,3 +84,27 @@ fun highlightColor(name: String?, dark: Boolean): Color? = when (name) {
     "pink" -> if (dark) Color(0xFF7A2F58) else Color(0xFFF8BBD0)
     else -> null
 }
+
+// ---- app wallpaper ------------------------------------------------------------------------------
+
+/** Scaffold container colour: transparent while the app wallpaper shows behind the screens. */
+@Composable
+fun screenContainerColor(hasWallpaper: Boolean): Color =
+    if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.background
+
+/** Top bars and the tab row: translucent over the app wallpaper. */
+@Composable
+fun barContainerColor(hasWallpaper: Boolean): Color =
+    if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.8f) else MaterialTheme.colorScheme.surface
+
+/**
+ * Behind reading text (entry body, Bible verses): at least 88% opaque over the app wallpaper,
+ * whatever the strength setting; nothing when there is no wallpaper.
+ */
+@Composable
+fun readingCardColor(hasWallpaper: Boolean, strength: Float): Color =
+    if (hasWallpaper) {
+        MaterialTheme.colorScheme.surface.copy(alpha = maxOf(0.88f, 1f - strength))
+    } else {
+        Color.Transparent
+    }

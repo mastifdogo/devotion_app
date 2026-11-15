@@ -7,15 +7,23 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mastifdogo.devotion.ui.DetailScreen
 import com.mastifdogo.devotion.ui.DevotionTheme
 import com.mastifdogo.devotion.ui.ListScreen
 import com.mastifdogo.devotion.ui.ProfileDialog
 import com.mastifdogo.devotion.ui.SettingsScreen
+import com.mastifdogo.devotion.ui.WallpapersScreen
 import com.mastifdogo.devotion.ui.isDarkTheme
 
 class MainActivity : ComponentActivity() {
@@ -38,9 +46,39 @@ class MainActivity : ComponentActivity() {
             }
 
             DevotionTheme(dark = dark) {
-                DevotionApp(vm)
+                AppBackground(vm) { DevotionApp(vm) }
             }
         }
+    }
+}
+
+/**
+ * The theme background, and over it the app wallpaper (if one is set) with a scrim of the
+ * background colour whose opacity is 1 - strength. Screens are transparent where it shows.
+ */
+@Composable
+private fun AppBackground(vm: MainViewModel, content: @Composable () -> Unit) {
+    val background = MaterialTheme.colorScheme.background
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(background),
+    ) {
+        val wallpaper = vm.appWallpaper
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(background.copy(alpha = 1f - vm.wallpaperStrength)),
+            )
+        }
+        content()
     }
 }
 
@@ -53,6 +91,7 @@ private fun DevotionApp(vm: MainViewModel) {
     when (screen) {
         is Screen.EntryList -> ListScreen(vm)
         is Screen.Settings -> SettingsScreen(vm)
+        is Screen.Wallpapers -> WallpapersScreen(vm)
         is Screen.Detail -> {
             val entry = vm.entryById(screen.id)
             if (entry == null) {

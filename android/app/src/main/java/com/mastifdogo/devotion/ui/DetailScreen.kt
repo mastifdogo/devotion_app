@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -38,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,8 +71,11 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
     val annotations = remember(allAnnotations, entry.id) { vm.annotationsFor(entry.id) }
     var editing by remember(entry.id) { mutableStateOf<EditTarget?>(null) }
     val dark = isAppInDarkTheme()
+    val hasWallpaper = vm.appWallpaper != null
 
     Scaffold(
+        containerColor = screenContainerColor(hasWallpaper),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
@@ -85,83 +90,35 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
             )
         },
         bottomBar = { PlayerBar(vm, entry) },
     ) { padding ->
+        // Over an app wallpaper the whole text sits on a card that is at least 88% opaque.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
         ) {
-            Header(vm, entry)
-
-            if (entry.summary.isNotBlank()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "Summary",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            if (entry.body.isBlank()) {
-                if (entry.archived) {
-                    Text(
-                        text = "Archived on the server — full text is no longer available.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Surface(
+                color = readingCardColor(hasWallpaper, vm.wallpaperStrength),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    DetailContent(
+                        vm = vm,
+                        entry = entry,
+                        annotations = annotations,
+                        dark = dark,
+                        onEdit = { target -> editing = target },
                     )
                 }
-            } else {
-                val references = entry.references
-                val links = remember(references, entry.body) {
-                    TextLogic.usableLinks(references.map { Passage(it.start, it.end) }, entry.body.length)
-                }
-                EntryBodyText(
-                    body = entry.body,
-                    annotations = annotations,
-                    links = links,
-                    dark = dark,
-                    onHighlight = { start, end -> vm.highlightRange(entry.id, start, end) },
-                    onComment = { start, end ->
-                        if (vm.profile == null) {
-                            vm.openProfilePrompt()
-                        } else {
-                            editing = EditTarget(Passage(start, end), null)
-                        }
-                    },
-                    onOpenAnnotation = { annotation -> editing = EditTarget(Passage(annotation.start, annotation.end), annotation) },
-                    onOpenLink = { index -> references.getOrNull(index)?.let { vm.openBibleReference(it) } },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Press and hold to select text, then choose Highlight or Comment.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(16.dp))
-            NotesSection(
-                vm = vm,
-                entry = entry,
-                annotations = annotations,
-                onEdit = { annotation -> editing = EditTarget(Passage(annotation.start, annotation.end), annotation) },
-            )
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
@@ -188,6 +145,83 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
             },
         )
     }
+}
+
+/** Header, summary, body and notes of an entry. [onEdit] opens the highlight/comment dialog. */
+@Composable
+private fun DetailContent(
+    vm: MainViewModel,
+    entry: Entry,
+    annotations: List<Annotation>,
+    dark: Boolean,
+    onEdit: (EditTarget) -> Unit,
+) {
+    Header(vm, entry)
+
+    if (entry.summary.isNotBlank()) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "Summary",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
+    if (entry.body.isBlank()) {
+        if (entry.archived) {
+            Text(
+                text = "Archived on the server — full text is no longer available.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else {
+        val references = entry.references
+        val links = remember(references, entry.body) {
+            TextLogic.usableLinks(references.map { Passage(it.start, it.end) }, entry.body.length)
+        }
+        EntryBodyText(
+            body = entry.body,
+            annotations = annotations,
+            links = links,
+            dark = dark,
+            onHighlight = { start, end -> vm.highlightRange(entry.id, start, end) },
+            onComment = { start, end ->
+                if (vm.profile == null) {
+                    vm.openProfilePrompt()
+                } else {
+                    onEdit(EditTarget(Passage(start, end), null))
+                }
+            },
+            onOpenAnnotation = { annotation -> onEdit(EditTarget(Passage(annotation.start, annotation.end), annotation)) },
+            onOpenLink = { index -> references.getOrNull(index)?.let { vm.openBibleReference(it) } },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Press and hold to select text, then choose Highlight or Comment.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+    HorizontalDivider()
+    Spacer(modifier = Modifier.height(16.dp))
+    NotesSection(
+        vm = vm,
+        entry = entry,
+        annotations = annotations,
+        onEdit = { annotation -> onEdit(EditTarget(Passage(annotation.start, annotation.end), annotation)) },
+    )
+    Spacer(modifier = Modifier.height(24.dp))
 }
 
 @Composable

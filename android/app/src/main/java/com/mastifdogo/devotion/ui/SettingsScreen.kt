@@ -1,7 +1,13 @@
 package com.mastifdogo.devotion.ui
 
 import android.content.Context
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,7 +38,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +48,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,14 +57,19 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.BuildConfig
 import com.mastifdogo.devotion.MainViewModel
+import com.mastifdogo.devotion.Screen
 import com.mastifdogo.devotion.UpdateUi
 import com.mastifdogo.devotion.update.Updater
 import java.io.File
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: MainViewModel) {
+    val hasWallpaper = vm.appWallpaper != null
     Scaffold(
+        containerColor = screenContainerColor(hasWallpaper),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
@@ -63,6 +78,7 @@ fun SettingsScreen(vm: MainViewModel) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
             )
         },
     ) { padding ->
@@ -85,6 +101,8 @@ fun SettingsScreen(vm: MainViewModel) {
                 SectionDivider()
             }
             AppearanceSection(vm)
+            SectionDivider()
+            WallpaperSection(vm)
             SectionDivider()
             CacheSection(vm)
             SectionDivider()
@@ -239,6 +257,67 @@ private fun PlaybackSection(vm: MainViewModel) {
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
+    }
+}
+
+/** The app wallpaper: current one, strength, remove; the row opens the Wallpapers screen. */
+@Composable
+private fun WallpaperSection(vm: MainViewModel) {
+    SectionTitle("Wallpaper")
+    val current = vm.appWallpaper
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { vm.open(Screen.Wallpapers) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val thumbModifier = Modifier
+            .size(width = 45.dp, height = 80.dp)
+            .clip(RoundedCornerShape(8.dp))
+        if (current != null) {
+            Image(
+                bitmap = current,
+                contentDescription = "Current app wallpaper",
+                contentScale = ContentScale.Crop,
+                modifier = thumbModifier,
+            )
+        } else {
+            Box(
+                modifier = thumbModifier.background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "None",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Wallpaper", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = if (current != null) "Shown behind the app. Tap to choose another." else "None. Tap to choose one from your server.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text("›", style = MaterialTheme.typography.titleLarge)
+    }
+    if (current != null) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Wallpaper strength: ${(vm.wallpaperStrength * 100f).roundToInt()}%",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Slider(
+            value = vm.wallpaperStrength,
+            onValueChange = { vm.updateWallpaperStrength(it) },
+            valueRange = 0f..1f,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(onClick = { vm.removeAppWallpaper() }) { Text("Remove app wallpaper") }
     }
 }
 
