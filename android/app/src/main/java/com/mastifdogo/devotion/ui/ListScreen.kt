@@ -52,6 +52,7 @@ fun ListScreen(vm: MainViewModel) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Sync now")
                         }
                     }
+                    TextButton(onClick = { vm.open(Screen.Bible) }) { Text("Bible") }
                     IconButton(onClick = { vm.open(Screen.Settings) }) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings")
                     }
@@ -183,6 +184,22 @@ private fun EntryRow(
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (entry.summary.isNotBlank()) {
+                Text(
+                    text = entry.summary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (entry.archived) {
+                Text(
+                    text = "Archived",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
                 )
             }
         }

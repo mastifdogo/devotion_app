@@ -45,3 +45,10 @@ fun formatDuration(ms: Long): String {
         String.format(Locale.US, "%d:%02d", minutes, seconds)
     }
 }
+
+/** 4_500_000 -> "4.3 MB". */
+fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.US, "%d kB", bytes / 1024L)
+    else -> "$bytes B"
+}

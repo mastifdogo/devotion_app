@@ -9,6 +9,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 
 private val LightColors = lightColorScheme(
@@ -66,4 +67,20 @@ fun DevotionTheme(dark: Boolean, content: @Composable () -> Unit) {
         else -> LightColors
     }
     MaterialTheme(colorScheme = colors, content = content)
+}
+
+/** True when the active Material colour scheme is a dark one (whatever made it so). */
+@Composable
+fun isAppInDarkTheme(): Boolean = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+
+/**
+ * Background for a highlight named yellow/green/blue/pink, or null for "none"/unknown.
+ * Light theme: pastel behind dark text. Dark theme: deep, muted tones behind light text.
+ */
+fun highlightColor(name: String?, dark: Boolean): Color? = when (name) {
+    "yellow" -> if (dark) Color(0xFF6B5A00) else Color(0xFFFFF176)
+    "green" -> if (dark) Color(0xFF2B5E2F) else Color(0xFFC5E1A5)
+    "blue" -> if (dark) Color(0xFF1D4E80) else Color(0xFFA9D4FA)
+    "pink" -> if (dark) Color(0xFF7A2F58) else Color(0xFFF8BBD0)
+    else -> null
 }

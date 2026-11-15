@@ -10,9 +10,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mastifdogo.devotion.ui.BibleScreen
 import com.mastifdogo.devotion.ui.DetailScreen
 import com.mastifdogo.devotion.ui.DevotionTheme
 import com.mastifdogo.devotion.ui.ListScreen
+import com.mastifdogo.devotion.ui.ProfileDialog
 import com.mastifdogo.devotion.ui.SettingsScreen
 import com.mastifdogo.devotion.ui.isDarkTheme
 
@@ -49,6 +51,7 @@ private fun DevotionApp(vm: MainViewModel) {
     when (screen) {
         is Screen.EntryList -> ListScreen(vm)
         is Screen.Settings -> SettingsScreen(vm)
+        is Screen.Bible -> BibleScreen(vm)
         is Screen.Detail -> {
             val entry = vm.entryById(screen.id)
             if (entry == null) {
@@ -59,4 +62,5 @@ private fun DevotionApp(vm: MainViewModel) {
             }
         }
     }
+    if (vm.profilePromptOpen) ProfileDialog(vm)
 }

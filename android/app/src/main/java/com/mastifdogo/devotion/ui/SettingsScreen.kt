@@ -1,6 +1,7 @@
 package com.mastifdogo.devotion.ui
 
 import android.content.Context
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -75,6 +76,10 @@ fun SettingsScreen(vm: MainViewModel) {
         ) {
             ServerSection(vm)
             SectionDivider()
+            ProfileSection(vm)
+            SectionDivider()
+            PlaybackSection(vm)
+            SectionDivider()
             AppearanceSection(vm)
             SectionDivider()
             CacheSection(vm)
@@ -104,21 +109,22 @@ private fun ServerSection(vm: MainViewModel) {
     OutlinedTextField(
         value = vm.serverUrl,
         onValueChange = { vm.updateServerUrl(it) },
-        label = { Text("Server URL") },
-        placeholder = { Text("http://192.168.1.50:8787") },
+        label = { Text("Server address") },
+        placeholder = { Text("192.168.1.50") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(modifier = Modifier.height(8.dp))
-    OutlinedTextField(
-        value = vm.apiToken,
-        onValueChange = { vm.updateApiToken(it) },
-        label = { Text("API token") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        modifier = Modifier.fillMaxWidth(),
+    Spacer(modifier = Modifier.height(4.dp))
+    val effective = vm.effectiveServerUrl
+    Text(
+        text = if (effective.isEmpty()) {
+            "Type the IP address or name of the computer the Devotion server runs on."
+        } else {
+            "The app connects to $effective"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(modifier = Modifier.height(8.dp))
     Button(onClick = { vm.testConnection() }, enabled = !vm.testing && vm.isServerConfigured) {
@@ -136,6 +142,46 @@ private fun ServerSection(vm: MainViewModel) {
                 MaterialTheme.colorScheme.primary
             },
         )
+    }
+}
+
+@Composable
+private fun ProfileSection(vm: MainViewModel) {
+    SectionTitle("Profile")
+    val current = vm.profile
+    Text(
+        text = if (current != null) "Signed in as ${current.name}" else "No profile chosen",
+        style = MaterialTheme.typography.bodyLarge,
+    )
+    Text(
+        text = "Highlights and notes belong to a profile.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    OutlinedButton(onClick = { vm.openProfilePrompt() }, enabled = vm.isServerConfigured) {
+        Text(if (current != null) "Switch profile" else "Choose profile")
+    }
+}
+
+@Composable
+private fun PlaybackSection(vm: MainViewModel) {
+    SectionTitle("Playback speed")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (speed in MainViewModel.PLAYBACK_SPEEDS) {
+            val label = MainViewModel.speedLabel(speed)
+            if (speed == vm.playbackSpeed) {
+                Button(onClick = { }) { Text(label) }
+            } else {
+                OutlinedButton(onClick = { vm.updatePlaybackSpeed(speed) }) { Text(label) }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+        }
     }
 }
 
@@ -195,7 +241,7 @@ private fun CacheSection(vm: MainViewModel) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear cache?") },
-            text = { Text("This removes all saved entries and audio from this device. They are downloaded again on the next sync.") },
+            text = { Text("This removes all saved entries and audio from this device. They are downloaded again on the next sync. Your notes and downloaded Bibles are kept.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmClear = false

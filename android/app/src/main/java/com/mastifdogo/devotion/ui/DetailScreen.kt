@@ -1,6 +1,11 @@
 package com.mastifdogo.devotion.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,17 +14,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -30,17 +42,38 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.MainViewModel
+import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.data.Entry
+import com.mastifdogo.devotion.logic.Paragraph
+import com.mastifdogo.devotion.logic.Passage
+import com.mastifdogo.devotion.logic.TextLogic
+
+/** The passage whose highlight/comment dialog is open, and the annotation already on it (if any). */
+private class EditTarget(val passage: Passage, val existing: Annotation?)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(vm: MainViewModel, entry: Entry) {
+    val allAnnotations = vm.annotations
+    val annotations = remember(allAnnotations, entry.id) { vm.annotationsFor(entry.id) }
+    var editing by remember(entry.id) { mutableStateOf<EditTarget?>(null) }
+    val dark = isAppInDarkTheme()
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -60,50 +93,425 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
         },
         bottomBar = { PlayerBar(vm, entry) },
     ) { padding ->
-        val scroll = rememberScrollState()
-        SelectionContainer(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 16.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            ) {
-                Text(
-                    text = entry.title.ifBlank { "(untitled)" },
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                val date = entryDateLabel(entry)
-                if (date.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+            Header(vm, entry)
+
+            if (entry.summary.isNotBlank()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Summary",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            if (entry.body.isBlank()) {
+                if (entry.archived) {
                     Text(
-                        text = date,
+                        text = "Archived on the server — full text is no longer available.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                val scripture = entry.scripture
-                if (!scripture.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = scripture,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = entry.body,
-                    style = MaterialTheme.typography.bodyLarge,
+            } else {
+                EntryBody(
+                    vm = vm,
+                    entry = entry,
+                    annotations = annotations,
+                    dark = dark,
+                    onPassage = { passage ->
+                        if (vm.profile == null) {
+                            vm.openProfilePrompt()
+                        } else {
+                            editing = EditTarget(
+                                passage,
+                                TextLogic.findOverlapping(annotations, entry.id, passage.start, passage.end),
+                            )
+                        }
+                    },
                 )
-                Spacer(modifier = Modifier.height(24.dp))
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(16.dp))
+            NotesSection(
+                vm = vm,
+                entry = entry,
+                annotations = annotations,
+                onEdit = { annotation -> editing = EditTarget(Passage(annotation.start, annotation.end), annotation) },
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    val target = editing
+    if (target != null) {
+        AnnotationDialog(
+            body = entry.body,
+            target = target,
+            dark = dark,
+            onDismiss = { editing = null },
+            onSave = { color, comment ->
+                vm.saveAnnotation(entry.id, target.passage.start, target.passage.end, target.existing, color, comment)
+                editing = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun Header(vm: MainViewModel, entry: Entry) {
+    Text(
+        text = entry.title.ifBlank { "(untitled)" },
+        style = MaterialTheme.typography.headlineSmall,
+    )
+    val date = entryDateLabel(entry)
+    if (date.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = date,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (entry.archived) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Archived",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+    val scripture = entry.scripture
+    if (!scripture.isNullOrBlank()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = scripture,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        if (vm.downloadedBibles.isNotEmpty()) {
+            TextButton(onClick = { vm.openBibleAt(scripture) }) { Text("Open in Bible") }
         }
     }
 }
+
+// ---- body with highlights and links -------------------------------------------------------------
+
+/** One stretch of the displayed paragraph text and what a tap on it means. */
+private class DisplaySegment(val start: Int, val end: Int, val sentence: Int, val link: Int)
+
+private class BuiltParagraph(val text: AnnotatedString, val segments: List<DisplaySegment>)
+
+private const val COMMENT_MARKER = " 💬"
+
+private fun buildParagraph(
+    body: String,
+    paragraph: Paragraph,
+    annotations: List<Annotation>,
+    entryId: Long,
+    links: List<Passage?>,
+    dark: Boolean,
+    linkColor: Color,
+): BuiltParagraph {
+    val spans = TextLogic.styledSpans(paragraph, links)
+    val perSentence = paragraph.sentences.map {
+        TextLogic.findOverlapping(annotations, entryId, it.start, it.end)
+    }
+    val builder = AnnotatedString.Builder()
+    val segments = ArrayList<DisplaySegment>()
+    for ((index, span) in spans.withIndex()) {
+        val from = builder.length
+        builder.append(body.substring(span.start, span.end))
+        val to = builder.length
+        val annotation = if (span.sentence >= 0) perSentence[span.sentence] else null
+        val background = highlightColor(annotation?.color, dark)
+        if (background != null) builder.addStyle(SpanStyle(background = background), from, to)
+        if (span.link >= 0) {
+            builder.addStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), from, to)
+        }
+        segments.add(DisplaySegment(from, to, span.sentence, span.link))
+
+        // A small marker after the last piece of a sentence that carries a comment.
+        val lastOfSentence = span.sentence >= 0 &&
+            (index == spans.size - 1 || spans[index + 1].sentence != span.sentence)
+        if (lastOfSentence && annotation != null && annotation.comment.isNotBlank()) {
+            val markerFrom = builder.length
+            builder.append(COMMENT_MARKER)
+            segments.add(DisplaySegment(markerFrom, builder.length, span.sentence, -1))
+        }
+    }
+    return BuiltParagraph(builder.toAnnotatedString(), segments)
+}
+
+@Composable
+private fun EntryBody(
+    vm: MainViewModel,
+    entry: Entry,
+    annotations: List<Annotation>,
+    dark: Boolean,
+    onPassage: (Passage) -> Unit,
+) {
+    val body = entry.body
+    val paragraphs = remember(body) { TextLogic.paragraphs(body) }
+    val references = entry.references
+    val links = remember(references, body) {
+        TextLogic.usableLinks(references.map { Passage(it.start, it.end) }, body.length)
+    }
+    for ((index, paragraph) in paragraphs.withIndex()) {
+        if (index > 0) Spacer(modifier = Modifier.height(12.dp))
+        ParagraphText(
+            body = body,
+            paragraph = paragraph,
+            annotations = annotations,
+            entryId = entry.id,
+            links = links,
+            dark = dark,
+            onSentence = onPassage,
+            onLink = { linkIndex ->
+                val reference = references.getOrNull(linkIndex)
+                if (reference != null) vm.openBibleReference(reference)
+            },
+        )
+    }
+}
+
+@Composable
+private fun ParagraphText(
+    body: String,
+    paragraph: Paragraph,
+    annotations: List<Annotation>,
+    entryId: Long,
+    links: List<Passage?>,
+    dark: Boolean,
+    onSentence: (Passage) -> Unit,
+    onLink: (Int) -> Unit,
+) {
+    val linkColor = MaterialTheme.colorScheme.primary
+    val built = remember(body, paragraph, annotations, links, dark, linkColor) {
+        buildParagraph(body, paragraph, annotations, entryId, links, dark, linkColor)
+    }
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val currentOnSentence by rememberUpdatedState(onSentence)
+    val currentOnLink by rememberUpdatedState(onLink)
+
+    Text(
+        text = built.text,
+        style = MaterialTheme.typography.bodyLarge,
+        onTextLayout = { layout = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(built) {
+                detectTapGestures(
+                    onTap = { position ->
+                        val result = layout
+                        if (result != null) {
+                            val offset = result.getOffsetForPosition(position)
+                            val segment = segmentAt(built.segments, offset)
+                            if (segment != null) {
+                                if (segment.link >= 0) {
+                                    currentOnLink(segment.link)
+                                } else {
+                                    val sentence = paragraph.sentences.getOrNull(segment.sentence)
+                                    if (sentence != null) currentOnSentence(sentence)
+                                }
+                            }
+                        }
+                    },
+                )
+            },
+    )
+}
+
+/**
+ * The segment a tap at display [offset] belongs to. A tap on the whitespace between two
+ * sentences (or past the end of the text) counts for the sentence before it.
+ */
+private fun segmentAt(segments: List<DisplaySegment>, offset: Int): DisplaySegment? {
+    if (segments.isEmpty()) return null
+    var index = segments.indexOfFirst { offset >= it.start && offset < it.end }
+    if (index < 0) index = segments.size - 1
+    val hit = segments[index]
+    if (hit.link >= 0 || hit.sentence >= 0) return hit
+    for (i in index - 1 downTo 0) if (segments[i].sentence >= 0) return DisplaySegment(0, 0, segments[i].sentence, -1)
+    for (i in index + 1 until segments.size) if (segments[i].sentence >= 0) return DisplaySegment(0, 0, segments[i].sentence, -1)
+    return null
+}
+
+// ---- highlight / comment dialog -----------------------------------------------------------------
+
+@Composable
+private fun AnnotationDialog(
+    body: String,
+    target: EditTarget,
+    dark: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    val existing = target.existing
+    var color by remember(target) { mutableStateOf(existing?.color ?: TextLogic.HIGHLIGHT_COLORS.first()) }
+    var comment by remember(target) { mutableStateOf(existing?.comment ?: "") }
+    val quoted = if (existing != null) {
+        TextLogic.quote(body, existing)
+    } else {
+        body.substring(
+            target.passage.start.coerceIn(0, body.length),
+            target.passage.end.coerceIn(target.passage.start.coerceIn(0, body.length), body.length),
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing != null) "Edit highlight" else "Highlight") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                Text(
+                    text = "“$quoted”",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontStyle = FontStyle.Italic,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    for (name in TextLogic.HIGHLIGHT_COLORS) {
+                        val swatch = highlightColor(name, dark) ?: Color.Gray
+                        val selected = color == name
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(swatch)
+                                .border(
+                                    width = if (selected) 3.dp else 1.dp,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    },
+                                    shape = CircleShape,
+                                )
+                                .clickable { color = name },
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = { color = TextLogic.COLOR_NONE },
+                    enabled = color != TextLogic.COLOR_NONE,
+                ) {
+                    Text(if (color == TextLogic.COLOR_NONE) "No highlight colour" else "Remove highlight")
+                }
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    label = { Text("Comment") },
+                    minLines = 3,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (color == TextLogic.COLOR_NONE && comment.isBlank() && existing != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Saving now removes this highlight.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(color, comment) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+// ---- notes --------------------------------------------------------------------------------------
+
+@Composable
+private fun NotesSection(
+    vm: MainViewModel,
+    entry: Entry,
+    annotations: List<Annotation>,
+    onEdit: (Annotation) -> Unit,
+) {
+    Text("Notes", style = MaterialTheme.typography.titleMedium)
+    Spacer(modifier = Modifier.height(8.dp))
+
+    val current = vm.profile
+    if (current == null) {
+        Text(
+            text = "Choose a profile to highlight passages and write notes.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedButton(onClick = { vm.openProfilePrompt() }) { Text("Choose profile") }
+        return
+    }
+
+    val savedNote = TextLogic.entryNote(annotations, entry.id)?.comment ?: ""
+    var noteText by remember(entry.id, current.id, savedNote) { mutableStateOf(savedNote) }
+    OutlinedTextField(
+        value = noteText,
+        onValueChange = { noteText = it },
+        label = { Text("Your note on this entry") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Button(
+        onClick = { vm.saveEntryNote(entry.id, noteText) },
+        enabled = noteText.trim() != savedNote.trim(),
+    ) {
+        Text("Save note")
+    }
+
+    val comments = annotations
+        .filter { !TextLogic.isEntryNote(it) && it.comment.isNotBlank() }
+        .sortedBy { it.start }
+    if (comments.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Comments on passages", style = MaterialTheme.typography.titleSmall)
+        for (annotation in comments) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onEdit(annotation) }
+                    .padding(vertical = 8.dp),
+            ) {
+                val quoted = TextLogic.quote(entry.body, annotation)
+                if (quoted.isNotBlank()) {
+                    Text(
+                        text = "“$quoted”",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(text = annotation.comment, style = MaterialTheme.typography.bodyMedium)
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+// ---- player -------------------------------------------------------------------------------------
 
 @Composable
 private fun PlayerBar(vm: MainViewModel, entry: Entry) {
@@ -130,7 +538,11 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry) {
             when {
                 !entry.hasAudio && !cached -> {
                     Text(
-                        text = "No audio for this entry yet.",
+                        text = if (entry.archived) {
+                            "Archived on the server — the audio is no longer available."
+                        } else {
+                            "No audio for this entry yet."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),
@@ -217,5 +629,9 @@ private fun PlayerControls(vm: MainViewModel, entry: Entry, loaded: Boolean, cac
             )
         }
         TextButton(onClick = { vm.skip(15_000L) }, enabled = canSeek) { Text("+15 s") }
+        // Playback speed: each tap steps to the next speed.
+        OutlinedButton(onClick = { vm.cyclePlaybackSpeed() }) {
+            Text(MainViewModel.speedLabel(vm.playbackSpeed))
+        }
     }
 }
