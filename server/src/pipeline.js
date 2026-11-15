@@ -132,7 +132,7 @@ export class Pipeline {
 				this.db.prepare('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE gmail_id = ? AND deleted_at IS NULL').run(now(), now(), id);
 				entries.forEach((e, i) => {
 					const t = now();
-					insert.run(id, i, e.kind || 'devotion', e.lesson_number ?? null, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
+					insert.run(id, i, e.kind || 'daily_reading', e.lesson_number ?? null, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
 				});
 				record.run(id, message.subject, message.from, message.date, entries.length ? 'done' : 'skipped', entries.length ? null : 'No devotion found in this email.', attempts + 1, now());
 				this.db.exec('COMMIT');

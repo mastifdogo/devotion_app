@@ -53,7 +53,7 @@ export function entryJson(row, audio = [], defaultVoice = '') {
 	const main = audio.find((a) => a.voice === defaultVoice) || audio[0];
 	return {
 		id: row.id,
-		kind: row.kind || 'devotion',
+		kind: row.kind === 'lesson' ? 'lesson' : 'daily_reading',
 		lesson_number: row.lesson_number ?? null,
 		title: row.title,
 		entry_date: row.entry_date,

@@ -200,7 +200,7 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.equal(sent.output_config.format.type, 'json_schema');
 	assert.equal(sent.fallbacks, 'default');
 	assert.deepEqual(calls.run.map((c) => c.cmd), ['piper', 'lame']);
-	assert.equal(calls.run[0].input, 'Daily Bread.\nMatthew 6:11.\nGive us this day.\n');
+	assert.equal(calls.run[0].input, 'Saturday, November 15.\nDaily Bread.\nMatthew 6:11.\nGive us this day.\n');
 	assert.deepEqual(calls.run[0].args.slice(0, 4), ['--model', '/voice.onnx', '--length_scale', '1.0']);
 	// A second run does nothing new.
 	assert.equal((await pipeline.runOnce()).processed, 0);
@@ -219,7 +219,7 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.equal(list.entries.length, 1);
 	const entry = list.entries[0];
 	assert.deepEqual({ ...entry, id: 0, created_at: '', updated_at: '', audio_sha256: '', audio: entry.audio.map((a) => ({ ...a, sha256: '' })) }, {
-		id: 0, kind: 'devotion', lesson_number: null, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
+		id: 0, kind: 'daily_reading', lesson_number: null, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
 		references: [{ start: 8, end: 16, book: 'Matthew', book_index: 39, chapter: 6, verse_start: 11, verse_end: null }],
 		has_audio: true, audio_bytes: 2048, audio_sha256: '', audio: [{ voice: 'voice', bytes: 2048, sha256: '' }], source_from: 'daily@example.org', source_subject: 'Daily <b>bread</b>', created_at: '', updated_at: '', archived: false, deleted: false,
 	});

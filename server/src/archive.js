@@ -147,7 +147,7 @@ export class Archiver {
 	async archiveEntry(entry) {
 		const date = (entry.received_at || entry.created_at).slice(0, 10);
 		const parts = [...folderParts(this.settings.get('smb_folder')), date.slice(0, 4), date.slice(5, 7)];
-		const label = entry.kind === 'lesson' && entry.lesson_number ? `Lesson ${entry.lesson_number} ${entry.title}` : entry.kind === 'daily_reading' ? `Reading ${entry.title}` : entry.title;
+		const label = entry.kind === 'lesson' && entry.lesson_number ? `Lesson ${entry.lesson_number} ${entry.title}` : entry.title;
 		const base = `${date}_${entry.id}_${safeName(label, 50).replace(/ /g, '-')}`;
 		const remoteDir = parts.join('\\');
 		const dir = await mkdtemp(path.join(tmpdir(), 'devotion-archive-'));

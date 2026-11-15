@@ -284,7 +284,7 @@ function render() {
 		for (const e of state.entries) {
 			const tr = el('tr');
 			tr.append(el('td', e.entry_date || e.created_at.slice(0, 10)));
-			const title = el('td', e.kind === 'lesson' ? `Lesson ${e.lesson_number ?? ''}: ${e.title}`.replace(' :', ':') : e.kind === 'daily_reading' ? `Daily reading: ${e.title}` : e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
+			const title = el('td', e.kind === 'lesson' ? `Lesson ${e.lesson_number ?? ''}: ${e.title}`.replace(' :', ':') : e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
 			const audioText = e.audio_count ? `${e.audio_count} of ${state.voice_count} voice${state.voice_count === 1 ? '' : 's'}, ${Math.round(e.audio_bytes / 1024)} kB` : e.audio_error ? 'failed' : 'not yet';
 			const audio = el('td', audioText + (e.audio_count && e.audio_error ? ' (some failed)' : ''), e.audio_error ? 'bad' : '');
 			if (e.audio_error) audio.title = e.audio_error; tr.append(audio);
