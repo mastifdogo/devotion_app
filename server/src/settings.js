@@ -1,5 +1,7 @@
 // Runtime settings: a value saved in the admin page wins, then an environment
 // variable of the same name in capitals, then the default.
+import { parseTimes, validTimeZone } from './schedule.js';
+
 export const DEFAULTS = {
 	public_url: '',
 	google_client_id: '',
@@ -8,7 +10,9 @@ export const DEFAULTS = {
 	google_email: '',
 	gmail_keywords: '',
 	gmail_query: '',
-	poll_minutes: '15',
+	check_times: '06:00', // one or more times of day
+	timezone: '', // IANA name; empty: the server's own
+	last_check_slot: '', // the scheduled check last done (managed by the server)
 	anthropic_api_key: '',
 	claude_model: 'claude-opus-5-5',
 	extract_instructions: '',
@@ -34,7 +38,7 @@ export const DEFAULTS = {
 // Never sent back to the browser; the admin page only learns whether they are set.
 export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password']);
 // Managed by the server itself, not by the settings form.
-const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice']);
+const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot']);
 
 export class Settings {
 	constructor(db, env = process.env) {
@@ -62,6 +66,7 @@ export class Settings {
 	publicView() {
 		const out = {};
 		for (const key of Object.keys(DEFAULTS)) {
+			if (key === 'last_check_slot') continue; // the server's own record, not a setting
 			if (SECRET_KEYS.has(key)) out[key + '_set'] = this.get(key) !== '';
 			else out[key] = this.get(key);
 		}
@@ -75,7 +80,12 @@ export class Settings {
 			if (typeof value !== 'string') continue;
 			const v = value.trim();
 			if (SECRET_KEYS.has(key) && v === '') continue;
-			if (key === 'poll_minutes' && !/^\d{1,4}$/.test(v)) continue;
+			if (key === 'check_times') {
+				const times = parseTimes(v);
+				if (times) this.set(key, times.join(', '));
+				continue;
+			}
+			if (key === 'timezone' && !validTimeZone(v)) continue;
 			if (key === 'tts_provider' && !['piper', 'openai', 'none'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;
 			if (key === 'archive_days' && !/^[1-9]\d{0,3}$/.test(v)) continue;

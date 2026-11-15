@@ -111,8 +111,11 @@ section.off { display:none; }
 	<textarea id="gmail_keywords" data-setting placeholder="Daily Devotion&#10;Morning Prayer"></textarea>
 	<label for="gmail_query">Extra Gmail filter (optional)</label>
 	<input id="gmail_query" data-setting placeholder="from:daily@example.org newer_than:30d" autocomplete="off">
-	<label for="poll_minutes">Check every (minutes)</label>
-	<input id="poll_minutes" data-setting inputmode="numeric" style="max-width:8rem">
+	<div class="grid">
+		<div><label for="check_times">Check for new mail at (time of day; several with commas)</label><input id="check_times" data-setting placeholder="06:00" autocomplete="off"></div>
+		<div><label for="timezone">Time zone</label><select id="timezone" data-setting></select></div>
+	</div>
+	<p class="small muted" id="next-check"></p>
 	<div class="row"><button data-save>Save</button><button class="plain" id="connect">Connect Gmail</button><button class="plain" id="disconnect" hidden>Disconnect</button></div>
 	<div id="paste" hidden>
 		<p class="small">Approve access in the tab that opened. If the browser then shows an error page at an address starting with <code>http://localhost</code>, that is expected: copy the whole address from the address bar and paste it here.</p>
@@ -264,7 +267,15 @@ let pauseRefresh = false;
 function startPolling() { clearInterval(poll); poll = setInterval(() => { if (!pauseRefresh) load(false).catch(() => {}); }, 8000); }
 const when = (iso) => iso ? new Date(iso).toLocaleString() : 'never';
 
+function fillTimeZones() {
+	const sel = $('timezone'); if (sel.options.length) return;
+	const server = el('option', `The server's own (${state.schedule.server_zone})`); server.value = ''; sel.append(server);
+	const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [];
+	for (const z of zones) { const o = el('option', z.replace(/_/g, ' ')); o.value = z; sel.append(o); }
+}
+
 function fillForm() {
+	fillTimeZones();
 	for (const input of document.querySelectorAll('[data-setting]')) {
 		if (input.dataset.secret !== undefined) { input.value = ''; input.placeholder = state.settings[input.id + '_set'] ? 'saved (leave empty to keep)' : 'not set'; }
 		else input.value = state.settings[input.id] ?? '';
@@ -314,6 +325,7 @@ function render() {
 	$('connect').textContent = g.connected ? 'Reconnect Gmail' : 'Connect Gmail';
 	$('disconnect').hidden = !g.connected;
 	$('app-url').textContent = location.origin;
+	$('next-check').textContent = `Server time now: ${state.schedule.now}. Next check: ${state.schedule.next}.`;
 	if (state.background_error) toast(state.background_error);
 
 	const row = (cells) => { const tr = el('tr'); for (const c of cells) { const td = el('td'); td.append(c); tr.append(td); } return tr; };

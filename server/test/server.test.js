@@ -177,10 +177,10 @@ test('first visit sets the password; afterwards only that password logs in', asy
 test('settings: secrets are write-only and an empty secret keeps the saved one', async (t) => {
 	const { call, settings } = await setup(t);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	let state = await (await call('/admin/api/settings', { body: { anthropic_api_key: 'sk-secret', gmail_query: ' from:x ', poll_minutes: 'abc', tts_provider: 'bogus', piper_voice: 'hijack', google_refresh_token: 'hijack', smb_share: '-U root //nas/share', archive_days: '0', tts_rate: 'fast' } })).json();
+	let state = await (await call('/admin/api/settings', { body: { anthropic_api_key: 'sk-secret', gmail_query: ' from:x ', check_times: 'abc', tts_provider: 'bogus', piper_voice: 'hijack', google_refresh_token: 'hijack', smb_share: '-U root //nas/share', archive_days: '0', tts_rate: 'fast' } })).json();
 	assert.equal(state.settings.anthropic_api_key_set, true);
 	assert.equal(state.settings.gmail_query, 'from:x');
-	assert.equal(state.settings.poll_minutes, '15');
+	assert.equal(state.settings.check_times, '06:00');
 	assert.equal(state.settings.tts_provider, 'piper');
 	assert.ok(!JSON.stringify(state).includes('sk-secret'));
 	assert.equal(settings.get('piper_voice'), '');
@@ -417,6 +417,32 @@ test('the voice engine runs one at a time, however many ask', async () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test('the mail is checked at the set times of day, once each, catching up after a restart', async (t) => {
+	const { call, settings, pipeline } = await setup(t);
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	let state = await (await call('/admin/api/settings', { body: { check_times: '18:30, 6:00', timezone: 'Mars/Olympus' } })).json();
+	assert.equal(state.settings.check_times, '06:00, 18:30');
+	assert.equal(state.settings.timezone, ''); // not a real zone: ignored
+	state = await (await call('/admin/api/settings', { body: { check_times: 'early', timezone: 'Etc/GMT+6' } })).json();
+	assert.deepEqual([state.settings.check_times, state.settings.timezone], ['06:00, 18:30', 'Etc/GMT+6']);
+	assert.match(state.schedule.next, /^\w+day, \w+ \d+ at (06:00|18:30)$/);
+	assert.equal(state.settings.last_check_slot, undefined); // not editable, not shown
+
+	let runs = 0;
+	pipeline.runOnce = async () => { runs++; return {}; };
+	const at = (iso) => new Date(iso);
+	// Nothing recorded yet: the first look runs a check (as starting up always did).
+	assert.equal(await pipeline.tick(at('2026-11-15T13:00:00Z')), true); // 07:00 at UTC−6
+	assert.equal(await pipeline.tick(at('2026-11-15T13:00:30Z')), false); // same slot: once only
+	assert.equal(await pipeline.tick(at('2026-11-16T00:29:00Z')), false); // 18:29: not yet
+	assert.equal(await pipeline.tick(at('2026-11-16T00:30:00Z')), true); // 18:30
+	assert.equal(settings.get('last_check_slot'), '2026-11-15 18:30');
+	// The server was off overnight past 06:00: one catch-up check when it comes back, not more.
+	assert.equal(await pipeline.tick(at('2026-11-16T15:00:00Z')), true);
+	assert.equal(await pipeline.tick(at('2026-11-16T15:00:30Z')), false);
+	assert.equal(runs, 3);
 });
 
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {

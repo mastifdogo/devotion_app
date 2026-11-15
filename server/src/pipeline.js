@@ -4,6 +4,7 @@ import path from 'node:path';
 import { now } from './db.js';
 import { speechText } from './tts.js';
 import { applySubject, classifySubject, lessonDate } from './classify.js';
+import { latestSlot, nextSlot, parseTimes } from './schedule.js';
 
 const MAX_EMAIL_CHARS = 600_000; // far beyond any real devotion; refuse rather than truncate
 const MAX_ATTEMPTS = 5;
@@ -44,14 +45,35 @@ export class Pipeline {
 		this.audioProgress = null;
 	}
 
+	times() {
+		return parseTimes(this.settings.get('check_times')) || ['06:00'];
+	}
+
+	/** The next scheduled check, "YYYY-MM-DD HH:MM" in the chosen time zone, for the admin page. */
+	nextCheck(now = new Date()) {
+		return nextSlot(now, this.times(), this.settings.get('timezone'));
+	}
+
+	/**
+	 * Checks the mail at the set times of day. Looks every 30 seconds whether a
+	 * scheduled time has passed since the last check; at startup that also
+	 * catches up a check missed while the server was off.
+	 */
+	async tick(now = new Date()) {
+		const slot = latestSlot(now, this.times(), this.settings.get('timezone'));
+		if (slot === this.settings.get('last_check_slot') || this.running) return false;
+		this.settings.set('last_check_slot', slot);
+		await this.runOnce().catch(() => {});
+		return true;
+	}
+
 	start() {
-		const tick = async () => {
-			await this.runOnce().catch(() => {});
-			const minutes = Math.max(1, Number(this.settings.get('poll_minutes')) || 15);
-			this.timer = setTimeout(tick, minutes * 60 * 1000);
+		const loop = () => {
+			this.tick().catch((err) => this.log.error('schedule:', err.message));
+			this.timer = setTimeout(loop, 30 * 1000);
 			this.timer.unref?.();
 		};
-		this.timer = setTimeout(tick, 5000);
+		this.timer = setTimeout(loop, 5000);
 		this.timer.unref?.();
 	}
 

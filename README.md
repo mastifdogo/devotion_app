@@ -95,6 +95,15 @@ connection after 7 days and the admin page will ask you to reconnect. Press
 *Publish app* on the consent screen to make it permanent; for a client only
 you use, no review is needed.
 
+### When the mail is checked
+
+On the **Gmail** tab, *Check for new mail at* takes one or more times of day
+(`06:00`, or `06:00, 18:00`), and *Time zone* says whose clock they are on
+(the server's own by default; a Proxmox container often runs on UTC, so pick
+yours). The tab shows the server's time now and the next check. If the
+server was off at a check time, it checks once when it starts again. *Check
+mail now* on the Status tab checks straight away.
+
 ### Which emails are imported
 
 Only emails that contain at least one of your **keywords** (in the subject,

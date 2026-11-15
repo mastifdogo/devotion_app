@@ -9,6 +9,7 @@ import { totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { TOPICS } from './wallpapers.js';
+import { wallClock } from './schedule.js';
 
 const page = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), name));
 const ADMIN_HTML = page('admin.html');
@@ -180,6 +181,15 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady(), audio_progress: pipeline.audioProgress },
 		// In a Proxmox container this is the container's memory limit.
 		memory_mb: Math.round((config.totalMemory ?? totalmem()) / 1048576),
+		schedule: (() => {
+			const tz = settings.get('timezone');
+			const fmt = (slot) => {
+				const [d, t] = slot.split(' ');
+				return `${new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' })} at ${t}`;
+			};
+			const { day, time } = wallClock(new Date(), tz);
+			return { now: fmt(`${day} ${time}`) + (tz ? ` (${tz})` : ''), next: fmt(pipeline.nextCheck()), server_zone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+		})(),
 		can_install_updates: updater.canInstall(),
 		password_fixed: Boolean(config.adminPassword),
 		entries: db.prepare(`SELECT id, kind, lesson_number, label_manual, title, entry_date, scripture, source_subject, created_at,
