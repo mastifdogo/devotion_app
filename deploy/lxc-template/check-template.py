@@ -4,7 +4,9 @@ mistakes that only show up on a server.
 
   check-template.py TEMPLATE [--require PATH ...] [--list]
 
---require PATH   a file that must be in the image (e.g. usr/local/bin/myapp); repeatable
+--require PATH   a file that must be in the image (e.g. usr/local/bin/myapp); repeatable.
+                 Symlinks are followed inside the image, as the container would
+                 (opt/myapp/current/bin/myapp works when "current" is a link).
 --list           print every path in the image and exit
 
 Exit status 0 when nothing is wrong, 1 otherwise. Needs zstd support for
@@ -54,6 +56,29 @@ def main():
 
     def has(*paths):
         return any(p in entries for p in paths)
+
+    def resolve(path, depth=0):
+        """The entry a path leads to inside the image, following symlinks the
+        way the running container would (an absolute target is relative to the
+        image's root, not to this machine's). None if it leads nowhere."""
+        if depth > 40:
+            return None
+        done = []
+        parts = [p for p in path.strip("/").split("/") if p and p != "."]
+        for i, part in enumerate(parts):
+            if part == "..":
+                if done:
+                    done.pop()
+                continue
+            done.append(part)
+            m = entries.get("/".join(done))
+            if m is None:
+                return None
+            if m.issym():
+                target = m.linkname
+                base = [] if target.startswith("/") else done[:-1]
+                return resolve("/".join(base + [target.strip("/")] + parts[i + 1 :]), depth + 1)
+        return entries.get("/".join(done))
 
     def any_match(pattern):
         rx = re.compile(pattern)
@@ -112,8 +137,15 @@ def main():
         notes.append(f"{len(debs)} downloaded .deb files left in var/cache/apt/archives.")
 
     for r in a.require:
-        if not has(r.lstrip("/")):
+        if resolve(r) is None:
             problems.append(f"required file missing: {r}")
+
+    # A link that points outside the image works on the build machine and
+    # nowhere else.
+    for n, m in entries.items():
+        if m.issym() and m.linkname.startswith(("/tmp/", "/home/", "/root/", "/builds/", "/github/")) and not n.startswith(("proc/", "dev/", "run/")):
+            if resolve(n) is None:
+                notes.append(f"{n} is a link to {m.linkname}, which is not in the image.")
 
     print(f"{a.template}: {len(entries)} entries")
     for p in problems:
