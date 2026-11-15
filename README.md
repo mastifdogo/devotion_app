@@ -34,7 +34,8 @@ Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entri
    on the container's console, above the login prompt; there is no need to
    log in on the console.
 4. The page asks you to choose an admin password, and then everything is set
-   up there:
+   up there, one tab per subject (Status, Entries, Emails, Gmail, Claude,
+   Audio, App & people, Wallpapers, Bibles, Archive, Updates, Password):
 
    - **Gmail**: the OAuth client and the keywords (see below).
    - **Reading the emails**: your Anthropic API key.
