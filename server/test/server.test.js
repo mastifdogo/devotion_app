@@ -50,7 +50,7 @@ async function setup(t, { extractResult, github } = {}) {
 	const gmail = new Gmail({ settings, port: 8787, fetchImpl: googleFetch });
 	const fakeClient = { beta: { messages: { stream: (params) => ({ finalMessage: async () => {
 		calls.claude.push(params);
-		const result = extractResult ? extractResult(params) : params.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [{ title: 'Daily Bread', entry_date: null, scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.' }] };
+		const result = extractResult ? extractResult(params) : params.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [{ title: 'Daily Bread', entry_date: null, scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.', references: [{ text: 'this day', book: 'Matthew', chapter: 6, verse_start: 11, verse_end: null }, { text: 'not in the text', book: 'John', chapter: 1, verse_start: 1, verse_end: null }] }] };
 		return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(result) }] };
 	} }) } } };
 	const extractor = new Extractor({ settings, clientFactory: () => fakeClient });
@@ -219,6 +219,7 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	const entry = list.entries[0];
 	assert.deepEqual({ ...entry, id: 0, created_at: '', updated_at: '', audio_sha256: '' }, {
 		id: 0, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
+		references: [{ start: 8, end: 16, book: 'Matthew', book_index: 39, chapter: 6, verse_start: 11, verse_end: null }],
 		has_audio: true, audio_bytes: 2048, audio_sha256: '', source_from: 'daily@example.org', source_subject: 'Daily <b>bread</b>', created_at: '', updated_at: '', archived: false, deleted: false,
 	});
 	const audio = await call(`/api/entries/${entry.id}/audio`);
@@ -455,7 +456,7 @@ test('archive: old entries go to the share, and only then leave the server', asy
 
 	// On the server it is now a stub: title, date, scripture and summary, no text or audio.
 	const changed = (await (await call(`/api/entries?since=${encodeURIComponent(syncedAt)}`)).json()).entries;
-	assert.deepEqual(changed.map((e) => [e.title, e.archived, e.deleted, e.body, e.has_audio, e.summary, e.scripture]), [['Daily Bread', true, false, '', false, 'On provision.', 'Matthew 6:11']]);
+	assert.deepEqual(changed.map((e) => [e.title, e.archived, e.deleted, e.body, e.has_audio, e.summary, e.scripture, e.references.length]), [['Daily Bread', true, false, '', false, 'On provision.', 'Matthew 6:11', 1]]);
 	assert.equal((await (await call('/api/entries')).json()).entries[0].archived, true);
 	assert.equal((await call(`/api/entries/${entry.id}/audio`)).status, 404);
 	assert.throws(() => readFileSync(path.join(audioDir, audioFile)));

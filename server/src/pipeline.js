@@ -124,15 +124,15 @@ export class Pipeline {
 			}
 			if (message.text.length > MAX_EMAIL_CHARS) throw Object.assign(new Error(`The email is too long (${message.text.length} characters).`), { retryable: false });
 			const entries = await this.extractor.extract(message);
-			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, title, entry_date, scripture, summary, body, source_from, source_subject, received_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, title, entry_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 			this.db.exec('BEGIN');
 			try {
 				// A retry after a half-finished attempt must not leave duplicates.
 				this.db.prepare('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE gmail_id = ? AND deleted_at IS NULL').run(now(), now(), id);
 				entries.forEach((e, i) => {
 					const t = now();
-					insert.run(id, i, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, message.from, message.subject, message.date, t, t);
+					insert.run(id, i, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
 				});
 				record.run(id, message.subject, message.from, message.date, entries.length ? 'done' : 'skipped', entries.length ? null : 'No devotion found in this email.', attempts + 1, now());
 				this.db.exec('COMMIT');
@@ -180,7 +180,7 @@ export class Pipeline {
 		if (!entry) return false;
 		if (entry.audio_file) await rm(path.join(this.audioDir, entry.audio_file), { force: true });
 		// Kept as a tombstone so the app removes its cached copy on the next sync.
-		this.db.prepare("UPDATE entries SET deleted_at = ?, updated_at = ?, audio_file = NULL, audio_bytes = NULL, audio_sha256 = NULL, body = '' WHERE id = ?").run(now(), now(), id);
+		this.db.prepare("UPDATE entries SET deleted_at = ?, updated_at = ?, audio_file = NULL, audio_bytes = NULL, audio_sha256 = NULL, body = '', refs = NULL WHERE id = ?").run(now(), now(), id);
 		return true;
 	}
 

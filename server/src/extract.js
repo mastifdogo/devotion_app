@@ -1,5 +1,6 @@
 // Turns the text of one email into zero or more devotion entries with Claude.
 import Anthropic from '@anthropic-ai/sdk';
+import { BOOKS } from './bibles.js';
 
 export class ExtractError extends Error {
 	constructor(message, { retryable = false } = {}) {
@@ -10,6 +11,7 @@ export class ExtractError extends Error {
 }
 
 const nullableString = (description) => ({ anyOf: [{ type: 'string' }, { type: 'null' }], description });
+const nullableInteger = (description) => ({ anyOf: [{ type: 'integer' }, { type: 'null' }], description });
 
 export const ENTRY_SCHEMA = {
 	type: 'object',
@@ -22,13 +24,29 @@ export const ENTRY_SCHEMA = {
 			items: {
 				type: 'object',
 				additionalProperties: false,
-				required: ['title', 'entry_date', 'scripture', 'summary', 'body'],
+				required: ['title', 'entry_date', 'scripture', 'summary', 'body', 'references'],
 				properties: {
 					title: { type: 'string', description: 'The devotion\'s own title; if it has none, a short faithful one.' },
 					entry_date: nullableString('The date the devotion is for, as YYYY-MM-DD, or null if the email does not say.'),
 					scripture: nullableString('The scripture reference(s) the devotion is built on, e.g. "John 3:16-17; Psalm 23", or null.'),
 					summary: { type: 'string', description: 'A summary of the devotion in two or three sentences, in your own words: its main point and what it asks of the reader. Plain text.' },
 					body: { type: 'string', description: 'The full text of the devotion as plain text, paragraphs separated by a blank line.' },
+					references: {
+						type: 'array',
+						description: 'Every Bible reference written in the body, so the app can link each one to the passage. Empty if the body cites none.',
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							required: ['text', 'book', 'chapter', 'verse_start', 'verse_end'],
+							properties: {
+								text: { type: 'string', description: 'The reference exactly as it is written in the body, character for character, e.g. "Jn. 3:16-17" or "Psalm 23". It is found in the body by searching for this text.' },
+								book: { type: 'string', enum: BOOKS, description: 'The book it refers to.' },
+								chapter: { type: 'integer', description: 'The chapter number. For a one-chapter book cited by verse alone (Jude 3), the chapter is 1.' },
+								verse_start: nullableInteger('The first verse, or null when a whole chapter is cited.'),
+								verse_end: nullableInteger('The last verse of a range, or null for a single verse or a whole chapter.'),
+							},
+						},
+					},
 				},
 			},
 		},
@@ -43,6 +61,8 @@ Your job is to return the devotion(s) the email contains. The body you return is
 - Leave out everything that is not the devotion: the surrounding newsletter material listed above, and bare URLs, image captions and "read more" stubs.
 - Write plain text. Paragraphs separated by a blank line, no markdown, no HTML, no bullet symbols. Repair artifacts of the conversion such as words broken across lines, stray spacing and repeated headings.
 - If a section has a heading such as "Prayer" or "Reflection", keep it as its own short line so a listener hears the transition.
+
+The app links Bible references in the text to the passage itself, so list each one the body contains: the wording as it stands in your body text, and the book, chapter and verses it means. Work out abbreviated and partial references from their context ("v. 5" after a citation of Romans 8 is Romans 8:5; "1 Cor." is 1 Corinthians). A reference that names several separate passages ("John 1:1, 14") is one item per passage, each with the part of the text that names it. Leave out anything you cannot place with confidence.
 
 An email can hold several devotions (a weekly digest, for instance); return each as its own entry. If the email is something else entirely (a receipt, a notice, an advert with no devotional text), return an empty list rather than inventing an entry.
 
@@ -107,6 +127,33 @@ export class Extractor {
 	}
 }
 
+/**
+ * Turns the model's references (a quote of the body plus what it points to)
+ * into character ranges in the body. Anything that can't be found or isn't a
+ * real book and chapter is dropped; ranges never overlap.
+ */
+export function locateReferences(body, list) {
+	const found = [];
+	const positive = (n) => (Number.isInteger(n) && n >= 1 && n <= 200 ? n : null);
+	for (const r of Array.isArray(list) ? list : []) {
+		const text = typeof r?.text === 'string' ? r.text.trim() : '';
+		const bookIndex = BOOKS.indexOf(r?.book);
+		const chapter = positive(r?.chapter);
+		if (text.length < 2 || bookIndex < 0 || !chapter) continue;
+		const verseStart = positive(r.verse_start);
+		const verseEnd = verseStart && positive(r.verse_end) && r.verse_end > verseStart ? r.verse_end : null;
+		// Every place the wording occurs: a devotion often repeats its key verse.
+		for (let at = body.indexOf(text); at !== -1; at = body.indexOf(text, at + text.length)) {
+			found.push({ start: at, end: at + text.length, book: BOOKS[bookIndex], book_index: bookIndex, chapter, verse_start: verseStart, verse_end: verseEnd });
+		}
+	}
+	// Longest first, so "John 3:16-17" wins over a separate "John 3:16" at the same place.
+	found.sort((a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start);
+	const kept = [];
+	for (const f of found) if (!kept.some((k) => f.start < k.end && k.start < f.end)) kept.push(f);
+	return kept.sort((a, b) => a.start - b.start);
+}
+
 /** Guards what goes into the database, whatever the model returned. */
 export function normalizeEntries(parsed) {
 	const list = Array.isArray(parsed?.entries) ? parsed.entries : [];
@@ -115,13 +162,15 @@ export function normalizeEntries(parsed) {
 	for (const e of list) {
 		const body = clean(e?.body);
 		if (!body) continue;
+		const text = body.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n');
 		const date = clean(e.entry_date);
 		out.push({
 			title: clean(e.title) || 'Untitled',
 			entry_date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
 			scripture: clean(e.scripture),
 			summary: clean(e.summary) || '',
-			body: body.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n'),
+			body: text,
+			references: locateReferences(text, e.references),
 		});
 	}
 	return out;

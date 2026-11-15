@@ -67,7 +67,7 @@ test('compareVersions', () => {
 
 test('normalizeEntries drops empty bodies and bad dates', () => {
 	const out = normalizeEntries({ entries: [{ title: ' T ', entry_date: 'Nov 3', scripture: '', summary: null, body: 'a\n\n\n\nb' }, { title: 'x', body: '  ' }] });
-	assert.deepEqual(out, [{ title: 'T', entry_date: null, scripture: null, summary: '', body: 'a\n\nb' }]);
+	assert.deepEqual(out, [{ title: 'T', entry_date: null, scripture: null, summary: '', body: 'a\n\nb', references: [] }]);
 	assert.deepEqual(normalizeEntries(null), []);
 });
 
@@ -80,4 +80,29 @@ test('keywords: parsing, the Gmail query, and matching', () => {
 	assert.equal(buildQuery(['a'], ''), '{"a"}');
 	assert.equal(matchKeyword({ subject: 'Your MORNING\n prayer', text: '' }, kws), 'morning prayer');
 	assert.equal(matchKeyword({ subject: 'Receipt', from: 'shop', text: 'thanks' }, ['devotion']), null);
+});
+
+import { locateReferences, ENTRY_SCHEMA } from '../src/extract.js';
+
+test('verse references are pinned to where they stand in the text', () => {
+	const body = 'As John 3:16 says, and again John 3:16-17 (cf. Ps. 23), then v. 5.\n\nJohn 3:16';
+	const refs = locateReferences(body, [
+		{ text: 'John 3:16', book: 'John', chapter: 3, verse_start: 16, verse_end: null },
+		{ text: 'John 3:16-17', book: 'John', chapter: 3, verse_start: 16, verse_end: 17 },
+		{ text: 'Ps. 23', book: 'Psalms', chapter: 23, verse_start: null, verse_end: null },
+		{ text: 'v. 5', book: 'Romans', chapter: 8, verse_start: 5, verse_end: 5 },
+		{ text: 'Hezekiah 4:1', book: 'Hezekiah', chapter: 4, verse_start: 1, verse_end: null },
+		{ text: 'John 3:16', book: 'John', chapter: 0, verse_start: 16, verse_end: null },
+		{ text: 'Mark 1:1', book: 'Mark', chapter: 1, verse_start: 1, verse_end: null },
+		null,
+	]);
+	assert.deepEqual(refs.map((r) => [body.slice(r.start, r.end), r.book_index, r.chapter, r.verse_start, r.verse_end]), [
+		['John 3:16', 42, 3, 16, null],
+		['John 3:16-17', 42, 3, 16, 17], // the longer reference wins where both match
+		['Ps. 23', 18, 23, null, null],
+		['v. 5', 44, 8, 5, null],
+		['John 3:16', 42, 3, 16, null],
+	]);
+	assert.deepEqual(locateReferences('text', undefined), []);
+	assert.equal(ENTRY_SCHEMA.properties.entries.items.properties.references.items.properties.book.enum.length, 66);
 });

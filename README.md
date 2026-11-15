@@ -98,7 +98,8 @@ The optional *extra Gmail filter* narrows the search further with normal
 Gmail search syntax, for example `from:daily@example.org newer_than:30d`.
 
 Each matching email is read once. Claude returns the devotion(s) in it as
-entries (title, date, scripture reference, one-line summary, full text) and
+entries (title, date, scripture reference, a short summary, full text, and
+every Bible reference in the text so the app can link it to the passage) and
 leaves out the newsletter material around them; an email with no devotion in
 it creates nothing. The *Emails read* table shows what happened to each one.
 

@@ -76,7 +76,7 @@ export function openDb(dataDir) {
 	// Columns added after the first release; a database made by an older
 	// version gets them here.
 	const have = new Set(db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name));
-	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT']]) {
+	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT']]) {
 		if (!have.has(column)) db.exec(`ALTER TABLE entries ADD COLUMN ${column} ${type}`);
 	}
 	return db;

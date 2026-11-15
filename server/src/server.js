@@ -35,6 +35,15 @@ export function verifyPassword(password, stored) {
 	return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function parseRefs(text) {
+	try {
+		const list = JSON.parse(text || '[]');
+		return Array.isArray(list) ? list : [];
+	} catch {
+		return [];
+	}
+}
+
 export function entryJson(row) {
 	return {
 		id: row.id,
@@ -43,6 +52,7 @@ export function entryJson(row) {
 		scripture: row.scripture,
 		summary: row.summary ?? '',
 		body: row.body,
+		references: parseRefs(row.refs),
 		has_audio: Boolean(row.audio_file),
 		audio_bytes: row.audio_bytes ?? 0,
 		audio_sha256: row.audio_sha256,
