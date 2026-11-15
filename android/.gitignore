@@ -1,0 +1,23 @@
+# Gradle / build outputs
+.gradle/
+build/
+**/build/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# Signing material - never commit
+*.jks
+*.keystore
+keystore.properties
+
+# OS noise
+.DS_Store
