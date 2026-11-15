@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 class WallpaperLogicTest {
 
@@ -112,5 +113,45 @@ class WallpaperLogicTest {
             // and not more than needed
             assertTrue("w=$w s=$s", s == 1 || w / (s / 2) > 1440)
         }
+    }
+
+    // ---- random pick on app start ---------------------------------------------------------------
+
+    private fun lib(vararg items: Pair<String, String>) = WallpaperLibrary(
+        topics = items.map { it.second }.distinct().map { WallTopic(it, it, 1) },
+        wallpapers = items.map { ServerWallpaper(it.first, it.second, null, null, null, null, null, null) },
+    )
+
+    @Test
+    fun pickRandom_respectsTopicAndAvoidsCurrent() {
+        val library = lib("a" to "nature", "b" to "nature", "c" to "sky")
+        repeat(50) { seed ->
+            val pick = WallpaperLogic.pickRandom(library, "nature", "a", Random(seed))
+            assertEquals("b", pick?.id)
+        }
+        val seen = HashSet<String>()
+        repeat(100) { seed -> WallpaperLogic.pickRandom(library, null, "a", Random(seed))?.let { seen.add(it.id) } }
+        assertEquals(setOf("b", "c"), seen)
+    }
+
+    @Test
+    fun pickRandom_singleOrNone() {
+        val library = lib("a" to "nature", "c" to "sky")
+        // Only one in the topic: it may repeat the current one.
+        assertEquals("c", WallpaperLogic.pickRandom(library, "sky", "c", Random(1))?.id)
+        // A topic the server no longer has means all topics.
+        assertTrue(WallpaperLogic.pickRandom(library, "gone", "a", Random(1))?.id == "c")
+        assertNull(WallpaperLogic.pickRandom(WallpaperLibrary(emptyList(), emptyList()), null, null, Random(1)))
+        assertEquals("a", WallpaperLogic.pickRandom(lib("a" to "nature"), null, null, Random(7))?.id)
+    }
+
+    @Test
+    fun topicsRoundTrip() {
+        val topics = listOf(WallTopic("nature", "Nature", 12), WallTopic("sky", "Big\tSky\n", 3))
+        val decoded = WallpaperLogic.decodeTopics(WallpaperLogic.encodeTopics(topics))
+        assertEquals(listOf(WallTopic("nature", "Nature", 0), WallTopic("sky", "Big Sky", 0)), decoded)
+        assertEquals(emptyList<WallTopic>(), WallpaperLogic.decodeTopics(null))
+        assertEquals(emptyList<WallTopic>(), WallpaperLogic.decodeTopics(""))
+        assertEquals(listOf(WallTopic("x", "x", 0)), WallpaperLogic.decodeTopics("x\n\tnoid\nx\tdup"))
     }
 }

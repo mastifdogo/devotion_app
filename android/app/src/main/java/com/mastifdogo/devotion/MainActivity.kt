@@ -7,6 +7,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -64,14 +65,16 @@ private fun AppBackground(vm: MainViewModel, content: @Composable () -> Unit) {
             .fillMaxSize()
             .background(background),
     ) {
-        val wallpaper = vm.appWallpaper
-        if (wallpaper != null) {
-            Image(
-                bitmap = wallpaper,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+        // Crossfades when a new wallpaper is swapped in (e.g. "New wallpaper each time").
+        Crossfade(targetState = vm.appWallpaper, label = "wallpaper") { wallpaper ->
+            if (wallpaper != null) {
+                Image(
+                    bitmap = wallpaper,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         content()
     }

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,10 +59,16 @@ import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.BuildConfig
 import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.Screen
+import com.mastifdogo.devotion.logic.AutoSync
+import com.mastifdogo.devotion.logic.SyncScheduleLogic
 import com.mastifdogo.devotion.logic.WindowLogic
 import com.mastifdogo.devotion.UpdateUi
 import com.mastifdogo.devotion.update.Updater
+import android.app.TimePickerDialog
+import android.text.format.DateFormat
 import java.io.File
+import java.time.ZoneId
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +98,8 @@ fun SettingsScreen(vm: MainViewModel) {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 ServerSection(vm)
+                SectionDivider()
+                SyncSection(vm)
                 SectionDivider()
                 ProfileSection(vm)
                 SectionDivider()
@@ -124,6 +133,92 @@ private fun SectionDivider() {
 private fun SectionTitle(text: String) {
     Text(text = text, style = MaterialTheme.typography.titleMedium)
     Spacer(modifier = Modifier.height(8.dp))
+}
+
+/** Last sync, Sync now, and when to sync automatically (also in the background). */
+@Composable
+private fun SyncSection(vm: MainViewModel) {
+    val context = LocalContext.current
+    SectionTitle("Sync")
+    val last = SyncScheduleLogic.lastSyncedLabel(
+        System.currentTimeMillis(),
+        vm.lastSyncMillis,
+        ZoneId.systemDefault(),
+        Locale.getDefault(),
+    )
+    Text(text = "Last synced: $last", style = MaterialTheme.typography.bodyMedium)
+    val error = vm.lastSyncErrorText
+    if (error != null) {
+        Text(text = error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Button(onClick = { vm.sync() }, enabled = !vm.syncing && vm.isServerConfigured) {
+        Text(if (vm.syncing) "Syncing…" else "Sync now")
+    }
+    if (vm.syncing) {
+        Spacer(modifier = Modifier.height(4.dp))
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
+    Spacer(modifier = Modifier.height(12.dp))
+    Text("Sync automatically", style = MaterialTheme.typography.bodyLarge)
+    for (mode in AutoSync.entries) {
+        val selected = vm.autoSync == mode
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectable(selected = selected, role = Role.RadioButton, onClick = { vm.updateAutoSync(mode) })
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = null)
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = if (mode == AutoSync.DAILY) {
+                    "${mode.label} ${SyncScheduleLogic.timeLabel(vm.dailySyncMinutes)}"
+                } else {
+                    mode.label
+                },
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            if (mode == AutoSync.DAILY) {
+                TextButton(onClick = { showDailyTimePicker(context, vm) }) { Text("Change time") }
+            }
+        }
+    }
+    Text(
+        text = "Hourly, 6-hourly and daily syncs also run while the app is closed, when the phone is " +
+            "online; Android may delay them a little to save battery.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** The platform time picker (stable on every Android version the app supports). */
+private fun showDailyTimePicker(context: Context, vm: MainViewModel) {
+    val minutes = vm.dailySyncMinutes
+    TimePickerDialog(
+        context,
+        { _, hour, minute -> vm.updateDailySyncTime(hour, minute) },
+        minutes / 60,
+        minutes % 60,
+        DateFormat.is24HourFormat(context),
+    ).show()
+}
+
+@Composable
+private fun RadioRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+    }
 }
 
 @Composable
@@ -305,6 +400,42 @@ private fun WallpaperSection(vm: MainViewModel) {
             )
         }
         Text("›", style = MaterialTheme.typography.titleLarge)
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Text("On each app start", style = MaterialTheme.typography.bodyLarge)
+    RadioRow("Keep my wallpaper", !vm.newWallpaperOnStart) { vm.updateNewWallpaperOnStart(false) }
+    RadioRow("New wallpaper each time", vm.newWallpaperOnStart) { vm.updateNewWallpaperOnStart(true) }
+    if (vm.newWallpaperOnStart) {
+        Text("From", style = MaterialTheme.typography.bodyMedium)
+        val topics = vm.wallTopicsCached
+        val chosen = vm.wallStartTopic
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(selected = chosen == null, onClick = { vm.updateWallStartTopic(null) }, label = { Text("All topics") })
+            for (topic in topics) {
+                Spacer(modifier = Modifier.width(8.dp))
+                FilterChip(
+                    selected = chosen == topic.id,
+                    onClick = { vm.updateWallStartTopic(topic.id) },
+                    label = { Text(topic.name) },
+                )
+            }
+            if (chosen != null && topics.none { it.id == chosen }) {
+                Spacer(modifier = Modifier.width(8.dp))
+                FilterChip(selected = true, onClick = { vm.updateWallStartTopic(null) }, label = { Text(chosen) })
+            }
+        }
+        if (topics.isEmpty()) {
+            Text(
+                text = "Open Wallpapers once to load your server's topics.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
     Spacer(modifier = Modifier.height(8.dp))
     // The text window over the wallpaper: 50% (wallpaper shows through) to 100% (opaque).

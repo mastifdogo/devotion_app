@@ -1,6 +1,7 @@
 package com.mastifdogo.devotion.logic
 
 import com.mastifdogo.devotion.data.AppJson
+import kotlin.random.Random
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -107,6 +108,35 @@ object WallpaperLogic {
         if (s.length != 6 || s.any { Character.digit(it, 16) < 0 }) return null
         return (0xFF000000.toInt()) or s.toInt(16)
     }
+
+    // ---- a new wallpaper on each app start --------------------------------------------------
+
+    /**
+     * A random wallpaper from [topicId] (null, or a topic the server no longer has, = all topics),
+     * never [currentId] when there are at least two to choose from. Null when there is none.
+     */
+    fun pickRandom(library: WallpaperLibrary, topicId: String?, currentId: String?, random: Random): ServerWallpaper? {
+        val candidates = filter(library, validTopic(library, topicId))
+        if (candidates.isEmpty()) return null
+        val choices = if (candidates.size >= 2) candidates.filter { it.id != currentId } else candidates
+        return choices[random.nextInt(choices.size)]
+    }
+
+    /** The server's topics as stored for the Settings chips: one "id<TAB>name" per line. */
+    fun encodeTopics(topics: List<WallTopic>): String =
+        topics.joinToString("\n") { t -> clean(t.id) + "\t" + clean(t.name) }
+
+    fun decodeTopics(text: String?): List<WallTopic> {
+        if (text.isNullOrBlank()) return emptyList()
+        return text.split('\n').mapNotNull { line ->
+            val id = line.substringBefore('\t').trim()
+            if (id.isEmpty()) return@mapNotNull null
+            val name = line.substringAfter('\t', id).trim().ifEmpty { id }
+            WallTopic(id, name, 0)
+        }.distinctBy { it.id }
+    }
+
+    private fun clean(s: String): String = s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
 
     // ---- the app background file ------------------------------------------------------------
 

@@ -431,17 +431,20 @@ private fun NotesSection(
 // ---- player -------------------------------------------------------------------------------------
 
 /**
- * The audio player. As the Scaffold's bottom bar it pads for the navigation bar itself; inside the
- * text window ([inWindow]) the Scaffold padding already did, and it is an opaque card.
+ * The audio player. As the Scaffold's bottom bar it pads for the navigation bar itself. Inside the
+ * text window ([inWindow]) the Scaffold padding already did that, and it is transparent, so it has
+ * the window's colour at the window's opacity, with a divider above it.
  */
 @Composable
 private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
     Surface(
-        color = if (inWindow) windowCardColor() else MaterialTheme.colorScheme.surface,
+        color = if (inWindow) Color.Transparent else MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = if (inWindow) 0.dp else 3.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        if (inWindow) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(
             modifier = Modifier
                 .then(if (inWindow) Modifier else Modifier.navigationBarsPadding())
@@ -510,6 +513,7 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
                 PlayerControls(vm = vm, entry = entry, loaded = loaded, cached = vm.isAudioCached(entry))
             }
         }
+      }
     }
 }
 

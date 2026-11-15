@@ -1,6 +1,7 @@
 package com.mastifdogo.devotion.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
@@ -16,10 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,14 +28,13 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.MainViewModel
@@ -47,58 +45,67 @@ import com.mastifdogo.devotion.logic.EntryTab
 import java.time.ZoneId
 import java.util.Locale
 
-/** The main screen: Daily readings, Lessons and Bible tabs under one top bar. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The main screen. No top app bar: the tab row (Daily readings / Lessons / Bible) is the top of
+ * the screen, with the Settings button at its right end. Syncing happens on start, in the
+ * background, or from Settings.
+ */
 @Composable
 fun ListScreen(vm: MainViewModel) {
     val hasWallpaper = vm.appWallpaper != null
+    // Without a top bar the Scaffold's content padding includes the status bar.
     Scaffold(
         containerColor = screenContainerColor(hasWallpaper),
         contentColor = MaterialTheme.colorScheme.onBackground,
-        topBar = {
-            TopAppBar(
-                title = { Text("Devotion") },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
-                actions = {
-                    if (vm.syncing) {
-                        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                        }
-                    } else {
-                        IconButton(onClick = { vm.sync() }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "Sync now")
-                        }
-                    }
-                    IconButton(onClick = { vm.open(Screen.Settings) }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                    }
-                },
-            )
-        },
     ) { padding ->
-        // The tab row and each tab's content live in the text window over the wallpaper.
         ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-                val tabs = EntryTab.entries
+                TabsBar(vm, hasWallpaper)
                 val selected = vm.selectedTab
-                TabRow(
-                    selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
-                    containerColor = if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.surface,
-                ) {
-                    for (tab in tabs) {
-                        Tab(
-                            selected = tab == selected,
-                            onClick = { vm.selectTab(tab) },
-                            text = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        )
-                    }
-                }
                 if (selected == EntryTab.BIBLE) {
                     BibleTab(vm, Modifier.fillMaxSize())
                 } else {
                     EntriesTab(vm, selected, cards = hasWallpaper)
                 }
             }
+        }
+    }
+}
+
+/** The tabs, taking the remaining width, and the Settings button on the same row. */
+@Composable
+private fun TabsBar(vm: MainViewModel, hasWallpaper: Boolean) {
+    val barColor = if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.surface
+    val tabs = EntryTab.entries
+    val selected = vm.selectedTab
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(barColor),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TabRow(
+            selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
+            containerColor = barColor,
+            modifier = Modifier.weight(1f),
+        ) {
+            for (tab in tabs) {
+                Tab(
+                    selected = tab == selected,
+                    onClick = { vm.selectTab(tab) },
+                    text = {
+                        Text(
+                            text = tab.label,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    },
+                )
+            }
+        }
+        IconButton(onClick = { vm.open(Screen.Settings) }) {
+            Icon(Icons.Filled.Settings, contentDescription = "Settings")
         }
     }
 }
@@ -192,7 +199,11 @@ private fun EmptyState(vm: MainViewModel, tab: EntryTab) {
                 text = if (tab == EntryTab.LESSONS) "No lessons yet." else "No daily readings yet.",
                 style = MaterialTheme.typography.bodyLarge,
             )
-            TextButton(onClick = { vm.sync() }, enabled = !vm.syncing) { Text("Sync now") }
+            Text(
+                text = "They arrive with the next sync (Settings → Sync).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -221,7 +232,7 @@ private fun EntryRow(
                     Modifier
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(windowCardColor())
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                 } else {
                     Modifier
                 },

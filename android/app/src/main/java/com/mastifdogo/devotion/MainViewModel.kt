@@ -32,16 +32,20 @@ import com.mastifdogo.devotion.data.EntryStore
 import com.mastifdogo.devotion.data.Profile
 import com.mastifdogo.devotion.data.SettingsStore
 import com.mastifdogo.devotion.data.StoredAnnotation
+import com.mastifdogo.devotion.data.SyncLock
 import com.mastifdogo.devotion.data.Voice
 import com.mastifdogo.devotion.data.WallpaperStore
 import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
+import com.mastifdogo.devotion.logic.AutoSync
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
 import com.mastifdogo.devotion.logic.ServerAddress
 import com.mastifdogo.devotion.logic.ServerWallpaper
+import com.mastifdogo.devotion.logic.SyncScheduleLogic
 import com.mastifdogo.devotion.logic.TextLogic
+import com.mastifdogo.devotion.logic.WallTopic
 import com.mastifdogo.devotion.logic.WallpaperLibrary
 import com.mastifdogo.devotion.logic.WallpaperLogic
 import com.mastifdogo.devotion.logic.WindowLogic
@@ -49,10 +53,12 @@ import com.mastifdogo.devotion.ui.ThemeMode
 import com.mastifdogo.devotion.update.ReleaseAsset
 import com.mastifdogo.devotion.update.UpdateCheck
 import com.mastifdogo.devotion.update.UpdateLogic
+import com.mastifdogo.devotion.sync.SyncScheduler
 import com.mastifdogo.devotion.update.Updater
 import coil.ImageLoader
 import java.io.File
 import java.util.UUID
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
@@ -62,6 +68,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 sealed class Screen {
@@ -109,7 +116,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun open(target: Screen) {
         screen = target
-        if (target is Screen.Settings) refreshVoices()
+        if (target is Screen.Settings) {
+            refreshVoices()
+            refreshSyncStatus()
+        }
         if (target is Screen.Wallpapers) {
             wallPreview = null
             wallMessage = null
@@ -527,12 +537,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val cache = store.sync(api, url)
-                    cache to store.cachedAudioFiles()
+                    SyncLock.mutex.withLock {
+                        val cache = store.sync(api, url)
+                        cache to store.cachedAudioFiles()
+                    }
                 }
                 entries = result.first.entries
                 lastSyncMillis = result.first.lastSyncMillis
                 cachedAudio = result.second
+                settings.lastSyncMillis = result.first.lastSyncMillis
+                settings.lastSyncError = ""
+                lastSyncErrorText = null
                 // The file behind the player may have been replaced or removed by the sync.
                 val loadedId = playerEntryId
                 val loadedVoice = playerVoice
@@ -555,6 +570,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw e
             } catch (e: Exception) {
                 syncError = "Sync failed: ${describe(e)}"
+                settings.lastSyncError = syncError ?: ""
+                lastSyncErrorText = syncError
             } finally {
                 syncing = false
             }
@@ -580,6 +597,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (update is UpdateUi.ReadyToInstall) update = UpdateUi.Idle
         }
+    }
+
+    // ---- automatic sync ----------------------------------------------------------------------
+
+    var autoSync: AutoSync by mutableStateOf(AutoSync.fromKey(settings.autoSync))
+        private set
+    /** Time of the daily sync, minutes after midnight. */
+    var dailySyncMinutes: Int by mutableStateOf(SyncScheduleLogic.normalizeMinutes(settings.dailySyncMinutes))
+        private set
+    /** The last failed sync's message (in the app or in the background), or null. */
+    var lastSyncErrorText: String? by mutableStateOf(settings.lastSyncError.takeIf { it.isNotBlank() })
+        private set
+
+    fun updateAutoSync(mode: AutoSync) {
+        autoSync = mode
+        settings.autoSync = mode.key
+        applySchedule()
+    }
+
+    fun updateDailySyncTime(hour: Int, minute: Int) {
+        val minutes = SyncScheduleLogic.normalizeMinutes(hour * 60 + minute)
+        dailySyncMinutes = minutes
+        settings.dailySyncMinutes = minutes
+        autoSync = AutoSync.DAILY
+        settings.autoSync = AutoSync.DAILY.key
+        applySchedule()
+    }
+
+    private fun applySchedule() {
+        try {
+            SyncScheduler.apply(getApplication())
+        } catch (e: Exception) {
+            lastSyncErrorText = "Could not schedule the automatic sync: ${describe(e)}"
+        }
+    }
+
+    /** Picks up what a background sync recorded while the app was open. */
+    private fun refreshSyncStatus() {
+        val background = settings.lastSyncMillis
+        if (background > lastSyncMillis) lastSyncMillis = background
+        if (!syncing) lastSyncErrorText = settings.lastSyncError.takeIf { it.isNotBlank() }
     }
 
     // ---- voices -----------------------------------------------------------------------------
@@ -733,7 +791,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Returns a Deferred that completes with true once [voice] of [entry] is on disk. */
     private fun ensureAudio(entry: Entry, voice: String, reportErrors: Boolean): Deferred<Boolean> {
         val name = AudioLogic.fileName(entry.id, voice)
-        if (name in cachedAudio && store.audioFile(entry.id, voice).isFile) {
+        // Files only get their final name after their hash was checked (also by the background sync).
+        if (store.audioFile(entry.id, voice).isFile) {
+            if (name !in cachedAudio) cachedAudio = cachedAudio + name
             return CompletableDeferred(true)
         }
         downloadJobs[name]?.let { return it }
@@ -1306,6 +1366,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var wallJob: Job? = null
 
+    /** "On each app start": true = a new wallpaper from the server, false = keep mine. */
+    var newWallpaperOnStart: Boolean by mutableStateOf(settings.newWallpaperOnStart)
+        private set
+    /** Topic the start-up wallpaper comes from; null = all topics. */
+    var wallStartTopic: String? by mutableStateOf(settings.wallStartTopic.takeIf { it.isNotEmpty() })
+        private set
+    /** The server's topics from the last successful /api/wallpapers, for the "From" chips. */
+    var wallTopicsCached: List<WallTopic> by mutableStateOf(WallpaperLogic.decodeTopics(settings.wallTopicsCache))
+        private set
+
+    fun updateNewWallpaperOnStart(value: Boolean) {
+        newWallpaperOnStart = value
+        settings.newWallpaperOnStart = value
+    }
+
+    fun updateWallStartTopic(topicId: String?) {
+        wallStartTopic = topicId
+        settings.wallStartTopic = topicId ?: ""
+    }
+
+    private fun rememberTopics(library: WallpaperLibrary) {
+        wallTopicsCached = library.topics
+        settings.wallTopicsCache = WallpaperLogic.encodeTopics(library.topics)
+    }
+
     fun refreshWallpapers() {
         if (!isServerConfigured) {
             wallLibrary = null
@@ -1321,7 +1406,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 wallUnreachable = false
                 wallUnsupported = library == null
                 wallLibrary = library
-                if (library != null) wallTopic = WallpaperLogic.validTopic(library, wallTopic)
+                if (library != null) {
+                    wallTopic = WallpaperLogic.validTopic(library, wallTopic)
+                    rememberTopics(library)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1427,6 +1515,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settings.textWindowOpacity = v
     }
 
+    /**
+     * Shows the stored wallpaper; then, with "New wallpaper each time", fetches the server's list,
+     * downloads a random one (like Use in app) and swaps it in. Any failure keeps the current one.
+     */
     private fun loadAppWallpaper() {
         viewModelScope.launch {
             val bitmap = withContext(Dispatchers.IO) {
@@ -1437,6 +1529,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             appWallpaper = bitmap?.asImageBitmap()
+            if (newWallpaperOnStart && isServerConfigured) newWallpaperForStart()
+        }
+    }
+
+    private suspend fun newWallpaperForStart() {
+        val url = serverUrl
+        val currentId = appWallpaperId.takeIf { it.isNotEmpty() }
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val library = api.wallpapers(url) ?: return@withContext null
+                val pick = WallpaperLogic.pickRandom(library, wallStartTopic, currentId, Random.Default)
+                if (pick == null || pick.id == currentId) {
+                    Triple(library, null, null)
+                } else {
+                    val file = wallpaperStore.replace(api, url, pick)
+                    Triple(library, pick, wallpaperStore.decode(file))
+                }
+            } ?: return
+            rememberTopics(result.first)
+            val pick = result.second
+            val bitmap = result.third
+            if (pick != null && bitmap != null) {
+                appWallpaper = bitmap.asImageBitmap()
+                appWallpaperId = pick.id
+                settings.wallpaperId = pick.id
+                settings.wallpaperPageUrl = pick.sourceUrl ?: ""
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Server unreachable or the download failed: keep the current wallpaper, silently.
         }
     }
 
@@ -1518,8 +1641,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadProfileContext()
         loadAppWallpaper()
         if (selectedTab == EntryTab.BIBLE) enterBibleTab()
+        // Keep the background work in line with the setting (also after an app update).
+        applySchedule()
         if (isServerConfigured) {
-            sync()
+            if (SyncScheduleLogic.syncOnStart(autoSync)) sync()
         } else {
             screen = Screen.Settings
         }

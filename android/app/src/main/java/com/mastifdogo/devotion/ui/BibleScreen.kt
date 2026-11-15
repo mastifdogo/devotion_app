@@ -1,6 +1,7 @@
 package com.mastifdogo.devotion.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -270,6 +274,7 @@ private fun BibleBooks(vm: MainViewModel, bible: Bible) {
 
 @Composable
 private fun BibleChapters(vm: MainViewModel, bible: Bible) {
+    val hasWallpaper = vm.appWallpaper != null
     val bookIndex = vm.biblePickBook.coerceIn(0, (bible.books.size - 1).coerceAtLeast(0))
     val book = bible.books.getOrNull(bookIndex)
     BibleHeader(vm, book?.name ?: "Chapters", showVersions = true)
@@ -283,8 +288,17 @@ private fun BibleChapters(vm: MainViewModel, bible: Bible) {
                 modifier = Modifier
                     .padding(4.dp)
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
                     .clickable { vm.showChapter(bookIndex, chapter, null) }
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    // Over a wallpaper the cells take the window's colour (and opacity) with an
+                    // outline; otherwise the tinted cells as before.
+                    .then(
+                        if (hasWallpaper) {
+                            Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                        } else {
+                            Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+                        },
+                    )
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -361,7 +375,14 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
                 }
             }
         }
-        Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+        val hasWallpaper = vm.appWallpaper != null
+        if (hasWallpaper) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Surface(
+            color = if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tonalElevation = if (hasWallpaper) 0.dp else 3.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

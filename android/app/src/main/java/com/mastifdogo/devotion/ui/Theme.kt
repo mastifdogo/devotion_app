@@ -108,10 +108,6 @@ fun screenContainerColor(hasWallpaper: Boolean): Color =
 fun barContainerColor(hasWallpaper: Boolean): Color =
     if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surface
 
-/** List items, the player bar and similar cards inside the text window: opaque, so they stay distinct. */
-@Composable
-fun windowCardColor(): Color = MaterialTheme.colorScheme.surfaceContainer
-
 /**
  * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),
  * inset from the sides and bottom (more, and at most 720dp wide, when 600dp or wider), so the

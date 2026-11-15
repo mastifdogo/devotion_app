@@ -97,6 +97,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Wallpaper thumbnails and previews streamed from the server (memory cache only).
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // Background sync (Every hour / Every 6 hours / Once a day).
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 

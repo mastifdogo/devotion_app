@@ -105,6 +105,45 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_WALL_TOPIC, "") ?: ""
         set(value) = prefs.edit().putString(KEY_WALL_TOPIC, value).apply()
 
+    // ---- sync ---------------------------------------------------------------------------------
+
+    /** Key of the "Sync automatically" choice (see AutoSync). */
+    var autoSync: String
+        get() = prefs.getString(KEY_AUTO_SYNC, "on_open") ?: "on_open"
+        set(value) = prefs.edit().putString(KEY_AUTO_SYNC, value).apply()
+
+    /** Time of the daily sync, minutes after midnight (default 06:30). */
+    var dailySyncMinutes: Int
+        get() = prefs.getInt(KEY_DAILY_SYNC, 6 * 60 + 30)
+        set(value) = prefs.edit().putInt(KEY_DAILY_SYNC, value).apply()
+
+    /** Device time of the last successful sync, in the app or in the background. */
+    var lastSyncMillis: Long
+        get() = prefs.getLong(KEY_LAST_SYNC, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_SYNC, value).apply()
+
+    /** Message of the last failed sync; "" after a successful one. */
+    var lastSyncError: String
+        get() = prefs.getString(KEY_LAST_SYNC_ERROR, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_LAST_SYNC_ERROR, value).apply()
+
+    // ---- wallpaper on app start -----------------------------------------------------------------
+
+    /** True: a new wallpaper from the server on each app start; false: keep the current one. */
+    var newWallpaperOnStart: Boolean
+        get() = prefs.getBoolean(KEY_WALL_ON_START, false)
+        set(value) = prefs.edit().putBoolean(KEY_WALL_ON_START, value).apply()
+
+    /** Topic the start-up wallpaper is picked from ("" = all topics). */
+    var wallStartTopic: String
+        get() = prefs.getString(KEY_WALL_START_TOPIC, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WALL_START_TOPIC, value).apply()
+
+    /** The server's topics from the last /api/wallpapers (see WallpaperLogic.encodeTopics). */
+    var wallTopicsCache: String
+        get() = prefs.getString(KEY_WALL_TOPICS, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WALL_TOPICS, value).apply()
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -135,6 +174,13 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_URL = "wallpaper_url"
         const val KEY_WINDOW_OPACITY = "text_window_opacity"
         const val KEY_WALL_TOPIC = "wall_topic"
+        const val KEY_AUTO_SYNC = "auto_sync"
+        const val KEY_DAILY_SYNC = "daily_sync_minutes"
+        const val KEY_LAST_SYNC = "last_sync_millis"
+        const val KEY_LAST_SYNC_ERROR = "last_sync_error"
+        const val KEY_WALL_ON_START = "wallpaper_new_on_start"
+        const val KEY_WALL_START_TOPIC = "wallpaper_start_topic"
+        const val KEY_WALL_TOPICS = "wallpaper_topics_cache"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"
