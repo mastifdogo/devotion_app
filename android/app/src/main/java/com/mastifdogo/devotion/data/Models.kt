@@ -31,11 +31,28 @@ data class Entry(
     val deleted: Boolean = false,
     /** Archived off the server: only title, date, scripture and summary are still served. */
     val archived: Boolean = false,
+    /** Verse references found in [body] by the server (absent on old servers). */
+    val references: List<EntryReference> = emptyList(),
 ) {
     /** "yyyy-MM-dd"-like key used for ordering: entry_date, falling back to created_at. */
     val sortKey: String
         get() = entryDate?.takeIf { it.isNotBlank() } ?: createdAt.orEmpty()
 }
+
+/**
+ * A verse reference as written in an entry body, e.g. "John 3:16-17" at body[[start], [end]).
+ * [bookIndex] is 0..65 in the standard Protestant order; [chapter] and the verses are 1-based.
+ */
+@Serializable
+data class EntryReference(
+    val start: Int = 0,
+    val end: Int = 0,
+    val book: String = "",
+    @SerialName("book_index") val bookIndex: Int = -1,
+    val chapter: Int = 1,
+    @SerialName("verse_start") val verseStart: Int? = null,
+    @SerialName("verse_end") val verseEnd: Int? = null,
+)
 
 @Serializable
 data class EntriesResponse(

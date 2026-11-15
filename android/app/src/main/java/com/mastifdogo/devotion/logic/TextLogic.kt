@@ -13,6 +13,13 @@ data class Passage(val start: Int, val end: Int)
 data class Paragraph(val start: Int, val end: Int, val sentences: List<Passage>)
 
 /**
+ * A piece of a paragraph that is drawn in one style. [sentence] is the index of the sentence it
+ * belongs to within the paragraph (-1 for whitespace between sentences) and [link] the index of
+ * the link it belongs to in the list given to [TextLogic.styledSpans] (-1 when it is not a link).
+ */
+data class StyledSpan(val start: Int, val end: Int, val sentence: Int, val link: Int)
+
+/**
  * Pure text and annotation logic (no Android): splitting a body into paragraphs and sentences,
  * finding annotations by overlap, and merging local and server annotations.
  */
@@ -115,6 +122,53 @@ object TextLogic {
         while (start < end && body[start].isWhitespace()) start++
         while (end > start && body[end - 1].isWhitespace()) end--
         if (start < end) out.add(Passage(start, end))
+    }
+
+    // ---- styled spans ------------------------------------------------------------------------
+
+    /**
+     * Links that can be drawn on a body of [bodyLength] characters: ranges outside the body or
+     * empty are dropped (their index maps to null) and so are links overlapping an earlier one.
+     */
+    fun usableLinks(links: List<Passage>, bodyLength: Int): List<Passage?> {
+        val result = arrayOfNulls<Passage>(links.size)
+        var lastEnd = -1
+        for (index in links.indices.sortedBy { links[it].start }) {
+            val link = links[index]
+            if (link.start < 0 || link.end > bodyLength || link.start >= link.end) continue
+            if (link.start < lastEnd) continue
+            result[index] = link
+            lastEnd = link.end
+        }
+        return result.toList()
+    }
+
+    /**
+     * Cuts [paragraph] into consecutive spans at every sentence and link boundary, so that each
+     * span lies in at most one sentence and at most one link. The spans cover the paragraph
+     * exactly, in order. [links] may contain nulls (see [usableLinks]); they are ignored.
+     */
+    fun styledSpans(paragraph: Paragraph, links: List<Passage?>): List<StyledSpan> {
+        val cuts = sortedSetOf(paragraph.start, paragraph.end)
+        for (s in paragraph.sentences) {
+            cuts.add(s.start.coerceIn(paragraph.start, paragraph.end))
+            cuts.add(s.end.coerceIn(paragraph.start, paragraph.end))
+        }
+        for (link in links) {
+            if (link == null || !overlaps(link.start, link.end, paragraph.start, paragraph.end)) continue
+            cuts.add(link.start.coerceIn(paragraph.start, paragraph.end))
+            cuts.add(link.end.coerceIn(paragraph.start, paragraph.end))
+        }
+        val points = cuts.toList()
+        val result = ArrayList<StyledSpan>()
+        for (i in 0 until points.size - 1) {
+            val from = points[i]
+            val to = points[i + 1]
+            val sentence = paragraph.sentences.indexOfFirst { from >= it.start && to <= it.end }
+            val link = links.indexOfFirst { it != null && from >= it.start && to <= it.end }
+            result.add(StyledSpan(from, to, sentence, link))
+        }
+        return result
     }
 
     // ---- ranges -----------------------------------------------------------------------------

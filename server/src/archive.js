@@ -109,10 +109,12 @@ export class Archiver {
 	async test() {
 		if (!this.configured()) throw new ArchiveError('Enter the share first, as //server/share.', 400);
 		const parts = folderParts(this.settings.get('smb_folder'));
-		const probe = [...parts, `devotion-test-${Date.now()}`].join('\\');
+		const name = `devotion-test-${Date.now()}`;
+		const probe = [...parts, name].join('\\');
 		const { out } = await this.smb([...this.mkdirs(parts), `mkdir "${probe}"`, `ls "${probe}"`, `rmdir "${probe}"`]);
-		// The listing of the folder just made is the proof; mkdir's own output is not checked.
-		if (!/^\s+\.\s+D\s/m.test(out)) throw new ArchiveError(`Could not write to the share: ${explain(out)}.`);
+		// The share listing the folder just made (as a directory) is the proof;
+		// mkdir's own output is not checked.
+		if (!new RegExp(`^\\s+${name}\\s+D\\w*\\s+0\\s`, 'm').test(out)) throw new ArchiveError(`Could not write to the share: ${explain(out)}.`);
 		return { ok: true, folder: parts.join('/') || '(top of the share)' };
 	}
 

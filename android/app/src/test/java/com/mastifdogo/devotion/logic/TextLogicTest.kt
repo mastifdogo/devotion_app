@@ -81,6 +81,59 @@ class TextLogicTest {
         assertTrue(TextLogic.paragraphs(" \n\n ").isEmpty())
     }
 
+    // ---- styled spans ------------------------------------------------------------------------
+
+    @Test
+    fun styledSpans_cutAtSentenceAndLinkBoundaries() {
+        val body = "Read John 3:16 today. Then rest."
+        val paragraph = TextLogic.paragraphs(body).single()
+        val linkStart = body.indexOf("John")
+        val links = TextLogic.usableLinks(listOf(Passage(linkStart, linkStart + "John 3:16".length)), body.length)
+        val spans = TextLogic.styledSpans(paragraph, links)
+        assertEquals(
+            listOf("Read ", "John 3:16", " today.", " ", "Then rest."),
+            spans.map { body.substring(it.start, it.end) },
+        )
+        assertEquals(listOf(0, 0, 0, -1, 1), spans.map { it.sentence })
+        assertEquals(listOf(-1, 0, -1, -1, -1), spans.map { it.link })
+        // The spans cover the paragraph exactly, in order.
+        assertEquals(paragraph.start, spans.first().start)
+        assertEquals(paragraph.end, spans.last().end)
+        for (i in 1 until spans.size) assertEquals(spans[i - 1].end, spans[i].start)
+    }
+
+    @Test
+    fun styledSpans_linkAcrossSentencesAndOutsideParagraph() {
+        val body = "First one. Second one.\n\nOther paragraph John 1."
+        val paragraphs = TextLogic.paragraphs(body)
+        // A link that starts in sentence 0 and ends in sentence 1, and one in the other paragraph.
+        val links = TextLogic.usableLinks(listOf(Passage(6, 16), Passage(body.indexOf("John 1"), body.length - 1)), body.length)
+        val first = TextLogic.styledSpans(paragraphs[0], links)
+        assertEquals(paragraphs[0].end, first.last().end)
+        assertTrue(first.filter { it.link == 0 }.map { it.sentence }.containsAll(listOf(0, 1)))
+        assertTrue(first.none { it.link == 1 })
+        val second = TextLogic.styledSpans(paragraphs[1], links)
+        assertEquals(listOf("John 1"), second.filter { it.link == 1 }.map { body.substring(it.start, it.end) })
+        // Without links a paragraph is just its sentences and the gaps between them.
+        assertEquals(listOf(0, -1, 1), TextLogic.styledSpans(paragraphs[0], emptyList()).map { it.sentence })
+    }
+
+    @Test
+    fun usableLinks_dropOutOfRangeEmptyAndOverlapping() {
+        val links = listOf(
+            Passage(10, 20),
+            Passage(15, 25), // overlaps the first
+            Passage(-1, 4),
+            Passage(30, 30),
+            Passage(40, 60), // past the end of the body
+            Passage(0, 5),
+        )
+        assertEquals(
+            listOf(Passage(10, 20), null, null, null, null, Passage(0, 5)),
+            TextLogic.usableLinks(links, 50),
+        )
+    }
+
     // ---- ranges -----------------------------------------------------------------------------
 
     @Test

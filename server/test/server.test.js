@@ -93,7 +93,7 @@ async function setup(t, { extractResult, github } = {}) {
 			if (put) share.files.set(put[2], readFileSync(put[1]));
 			else if (ls && ls[1].endsWith('.*')) {
 				for (const [name, data] of share.files) if (name.startsWith(ls[1].slice(0, -1))) out += `  ${name.split('\\').pop()}      A   ${share.truncate ? 1 : data.length}  Sun Nov 15 12:00:00 2026\n`;
-			} else if (ls) out += '  .                                   D        0  Sun Nov 15 12:00:00 2026\n  ..                                  D        0  Sun Nov 15 12:00:00 2026\n';
+			} else if (ls) out += `  ${ls[1].split('\\').pop()}                D        0  Sun Nov 15 12:00:00 2026\n\n\t\t151361008 blocks of size 1024. 94880016 blocks available\n`; // as the real program lists a folder
 		}
 		return { code: 0, out };
 	};
