@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { now } from './db.js';
 import { speechText } from './tts.js';
+import { applySubject, classifySubject, lessonDate } from './classify.js';
 
 const MAX_EMAIL_CHARS = 600_000; // far beyond any real devotion; refuse rather than truncate
 const MAX_ATTEMPTS = 5;
@@ -123,7 +124,7 @@ export class Pipeline {
 				return true;
 			}
 			if (message.text.length > MAX_EMAIL_CHARS) throw Object.assign(new Error(`The email is too long (${message.text.length} characters).`), { retryable: false });
-			const entries = await this.extractor.extract(message);
+			const entries = applySubject(await this.extractor.extract(message), message);
 			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, kind, lesson_number, title, entry_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 			this.db.exec('BEGIN');
@@ -150,6 +151,33 @@ export class Pipeline {
 			this.log.error(`email ${id}: ${err.message}`);
 			return false;
 		}
+	}
+
+	/**
+	 * Sorts entries made before the server read lessons and daily readings
+	 * from the subject. Runs at startup; changes only what the subject makes
+	 * certain, and marks changed entries so the app picks them up.
+	 */
+	reclassify() {
+		const rows = this.db.prepare('SELECT id, kind, lesson_number, title, entry_date, body, source_subject FROM entries WHERE deleted_at IS NULL AND source_subject IS NOT NULL').all();
+		const update = this.db.prepare('UPDATE entries SET kind = ?, lesson_number = ?, entry_date = ?, updated_at = ? WHERE id = ?');
+		let changed = 0;
+		for (const row of rows) {
+			const known = classifySubject(row.source_subject);
+			if (!known) continue;
+			let { lesson_number: number, entry_date: date } = row;
+			if (known.kind === 'lesson') {
+				number = known.lesson_number;
+				date = lessonDate(row.body, number) || date;
+			} else {
+				date = known.entry_date;
+			}
+			if (row.kind === known.kind && row.lesson_number === number && row.entry_date === date) continue;
+			update.run(known.kind, number ?? null, date, now(), row.id);
+			changed++;
+		}
+		if (changed) this.log.info(`sorted ${changed} earlier entr${changed === 1 ? 'y' : 'ies'} into lessons and daily readings`);
+		return changed;
 	}
 
 	/** Gives audio from before voices were tracked the voice it was made in. */

@@ -37,6 +37,7 @@ const updater = new Updater({ config, settings });
 const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, audioDir });
 
 pipeline.adoptLegacyAudio();
+pipeline.reclassify();
 
 server.listen(config.port, config.host, () => {
 	console.log(`devotion-server ${config.version} listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);

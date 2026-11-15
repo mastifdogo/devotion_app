@@ -268,6 +268,23 @@ test('a daily reading is marked as one, with its own date and the lesson it belo
 	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Sunday, November 15\.\nThe struggle is spiritual\.\n2 Corinthians 10:4-6\.\n/);
 });
 
+test('entries made before sorting by subject are sorted at startup', async (t) => {
+	const { db, pipeline } = await setup(t);
+	const insert = db.prepare("INSERT INTO entries (kind, title, entry_date, body, source_subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z')");
+	insert.run('daily_reading', 'Victory After Struggling', '2026-11-08', 'Victory After Struggling\n\nLesson 11\n\nNovember 15, 2026\n\nIntroduction', 'Lesson 11 – Victory After Struggling');
+	insert.run('daily_reading', 'Isaac’s Nonresistance', '2026-11-01', 'No date in this body.', 'Lesson 10 – Isaac’s Nonresistance');
+	insert.run('lesson', 'The struggle is spiritual', '2026-11-14', 'Body', 'November 15, 2026 – The struggle is spiritual');
+	insert.run('daily_reading', 'Other', '2026-11-02', 'Body', 'A newsletter');
+	assert.equal(pipeline.reclassify(), 3);
+	assert.deepEqual(db.prepare('SELECT kind, lesson_number, entry_date, updated_at > created_at AS touched FROM entries ORDER BY id').all().map((r) => ({ ...r })), [
+		{ kind: 'lesson', lesson_number: 11, entry_date: '2026-11-15', touched: 1 },
+		{ kind: 'lesson', lesson_number: 10, entry_date: '2026-11-01', touched: 1 },
+		{ kind: 'daily_reading', lesson_number: null, entry_date: '2026-11-15', touched: 1 },
+		{ kind: 'daily_reading', lesson_number: null, entry_date: '2026-11-02', touched: 0 },
+	]);
+	assert.equal(pipeline.reclassify(), 0); // nothing more to do the second time
+});
+
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {
 	let fail = true;
 	const { call, pipeline, db } = await setup(t, { extractResult: () => { if (fail) throw Object.assign(new Error('boom'), { retryable: true }); return { entries: [{ title: 'T', entry_date: '2026-01-02', scripture: null, summary: null, body: 'B' }] }; } });
