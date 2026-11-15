@@ -13,6 +13,7 @@ APP_UID=${APP_UID:-990}
 PIPER_URL=https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
 PIPER_SHA256=a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992
 VOICE=en_US-lessac-medium
+VOICE_SHA256=5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f
 VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/$VOICE.onnx
 VOICE_DIR=/usr/local/share/$APP/voices
 
@@ -36,7 +37,8 @@ chown -R root:root "$dest.new"
 chmod -R u=rwX,go=rX "$dest.new"
 rm -rf "$dest"
 mv "$dest.new" "$dest"
-ln -sfn "$dest" "/opt/$APP/current"
+# A relative link, so it also resolves when the image is inspected from outside.
+ln -sfn "releases/$version" "/opt/$APP/current"
 # Keep this version and the one before it.
 ls -1dt /opt/$APP/releases/*/ | tail -n +3 | xargs -r rm -rf
 
@@ -78,11 +80,9 @@ if [ "${SKIP_PIPER:-0}" != 1 ] && [ ! -s "$VOICE_DIR/$VOICE.onnx" ]; then
 	mkdir -p "$VOICE_DIR"
 	curl -fsSL --retry 3 -o "$VOICE_DIR/$VOICE.onnx.json" "$VOICE_URL.json"
 	curl -fsSL --retry 3 -o "$VOICE_DIR/$VOICE.onnx.part" "$VOICE_URL"
-	# A real voice is tens of megabytes; an error page is not.
-	[ "$(wc -c <"$VOICE_DIR/$VOICE.onnx.part")" -gt 20000000 ] || die "the voice download is too small to be a voice"
+	echo "$VOICE_SHA256  $VOICE_DIR/$VOICE.onnx.part" | sha256sum -c - >/dev/null || die "the voice download does not match its checksum"
 	grep -q '"sample_rate"' "$VOICE_DIR/$VOICE.onnx.json" || die "the voice's settings file is not what was expected"
 	mv "$VOICE_DIR/$VOICE.onnx.part" "$VOICE_DIR/$VOICE.onnx"
-	echo "install: voice $VOICE sha256 $(sha256sum "$VOICE_DIR/$VOICE.onnx" | cut -d' ' -f1)"
 fi
 
 if [ -d /run/systemd/system ]; then
