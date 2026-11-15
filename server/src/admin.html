@@ -113,14 +113,14 @@ th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
 		<option value="none">No audio</option>
 	</select>
 	<div data-for="piper">
-		<label>Voice (a voice not yet on the server is downloaded when you choose it, about 60 MB)</label>
+		<label>Voices (about 60 MB each to download)</label>
 		<div class="scroll"><table id="voices"></table></div>
 	</div>
 	<label for="tts_rate">Speaking pace</label>
 	<select id="tts_rate" data-setting style="max-width:14rem">
 		<option value="slow">Slower</option><option value="normal">Normal</option><option value="fast">Faster</option>
 	</select>
-	<p class="small muted">A new voice or pace applies to audio made from now on. Use "Redo audio" on an entry to hear it on an existing one.</p>
+	<p class="small muted">Every entry is read in every voice on the server, and each person picks the voice they listen to in the app; the default voice is what they hear until they choose. A newly downloaded voice is made for existing entries in the background. A new pace applies to audio made from now on: use "Redo audio" on an entry to hear it on an existing one.</p>
 	<div data-for="openai" class="grid">
 		<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
 		<div><label for="tts_openai_key">API key</label><input id="tts_openai_key" data-setting data-secret type="password" autocomplete="off"></div>
@@ -247,10 +247,13 @@ function render() {
 	const vt = $('voices'); vt.replaceChildren();
 	for (const v of state.voices) {
 		const name = el('span', v.name); name.append(el('div', v.description, 'muted small'));
-		const status = v.downloading ? 'downloading…' : v.selected ? 'in use' : v.installed ? 'on the server' : '';
+		const status = v.downloading ? 'downloading…' : v.selected ? 'default' : v.installed ? 'on the server' : '';
 		const actions = el('span');
-		if (!v.selected && !v.downloading) actions.append(button(v.installed ? 'Use' : 'Download and use', post(`/admin/api/voices/${v.id}/select`)));
-		if (v.installed && !v.built_in && !v.selected) actions.append(' ', button('Remove', post(`/admin/api/voices/${v.id}/delete`)));
+		if (!v.installed && !v.downloading) actions.append(button('Download', post(`/admin/api/voices/${v.id}/install`)));
+		if (v.installed && !v.selected) actions.append(button('Make default', post(`/admin/api/voices/${v.id}/select`)));
+		if (v.installed && !v.built_in && !v.selected) actions.append(' ', button('Remove', async () => {
+			if (confirm(`Remove the voice ${v.name} and every entry's audio in it?`)) { state = await api(`/admin/api/voices/${v.id}/delete`, {}); render(); }
+		}));
 		vt.append(row([name, el('span', status, v.selected ? 'ok' : 'muted'), actions]));
 	}
 
@@ -281,8 +284,9 @@ function render() {
 		for (const e of state.entries) {
 			const tr = el('tr');
 			tr.append(el('td', e.entry_date || e.created_at.slice(0, 10)));
-			const title = el('td', e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
-			const audio = el('td', e.has_audio ? Math.round(e.audio_bytes / 1024) + ' kB' : e.audio_error ? 'failed' : 'none', e.audio_error ? 'bad' : '');
+			const title = el('td', e.kind === 'lesson' ? `Lesson ${e.lesson_number ?? ''}: ${e.title}`.replace(' :', ':') : e.kind === 'daily_reading' ? `Daily reading: ${e.title}` : e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
+			const audioText = e.audio_count ? `${e.audio_count} of ${state.voice_count} voice${state.voice_count === 1 ? '' : 's'}, ${Math.round(e.audio_bytes / 1024)} kB` : e.audio_error ? 'failed' : 'not yet';
+			const audio = el('td', audioText + (e.audio_count && e.audio_error ? ' (some failed)' : ''), e.audio_error ? 'bad' : '');
 			if (e.audio_error) audio.title = e.audio_error; tr.append(audio);
 			const actions = el('td');
 			const redo = el('button', 'Redo audio', 'plain small'); redo.onclick = act(async () => { await api(`/admin/api/entries/${e.id}/audio`, {}); toast('Making audio…'); });

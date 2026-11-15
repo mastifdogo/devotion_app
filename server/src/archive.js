@@ -66,7 +66,7 @@ export function explain(out) {
 }
 
 export function entryText(entry) {
-	const head = [entry.title, entry.entry_date, entry.scripture].filter(Boolean).join('\n');
+	const head = [entry.kind === 'lesson' && entry.lesson_number ? `Lesson ${entry.lesson_number}: ${entry.title}` : entry.title, entry.entry_date, entry.scripture].filter(Boolean).join('\n');
 	const source = [entry.source_subject && `Email: ${entry.source_subject}`, entry.source_from && `From: ${entry.source_from}`, entry.received_at && `Received: ${entry.received_at}`].filter(Boolean).join('\n');
 	return [head, entry.summary && `Summary: ${entry.summary}`, entry.body, source].filter(Boolean).join('\n\n') + '\n';
 }
@@ -147,31 +147,35 @@ export class Archiver {
 	async archiveEntry(entry) {
 		const date = (entry.received_at || entry.created_at).slice(0, 10);
 		const parts = [...folderParts(this.settings.get('smb_folder')), date.slice(0, 4), date.slice(5, 7)];
-		const base = `${date}_${entry.id}_${safeName(entry.title, 50).replace(/ /g, '-')}`;
+		const label = entry.kind === 'lesson' && entry.lesson_number ? `Lesson ${entry.lesson_number} ${entry.title}` : entry.kind === 'daily_reading' ? `Reading ${entry.title}` : entry.title;
+		const base = `${date}_${entry.id}_${safeName(label, 50).replace(/ /g, '-')}`;
 		const remoteDir = parts.join('\\');
 		const dir = await mkdtemp(path.join(tmpdir(), 'devotion-archive-'));
 		try {
 			const text = path.join(dir, 'entry.txt');
 			await writeFile(text, entryText(entry));
 			const files = [{ local: text, remote: `${base}.txt`, size: (await stat(text)).size }];
-			if (entry.audio_file) {
-				const audio = path.join(this.audioDir, path.basename(entry.audio_file));
-				const info = await stat(audio).catch(() => null);
-				if (info) files.push({ local: audio, remote: `${base}.mp3`, size: info.size });
+			// Every voice the entry was made in, named after the voice.
+			const audio = this.db.prepare('SELECT voice, file FROM entry_audio WHERE entry_id = ? AND file IS NOT NULL ORDER BY voice').all(entry.id);
+			for (const a of audio) {
+				const local = path.join(this.audioDir, path.basename(a.file));
+				const info = await stat(local).catch(() => null);
+				if (info) files.push({ local, remote: `${base}_${safeName(a.voice || 'audio', 40).replace(/ /g, '-')}.mp3`, size: info.size });
 			}
 			const { out } = await this.smb([
 				...this.mkdirs(parts),
 				...files.map((f) => `put "${f.local}" "${remoteDir}\\${f.remote}"`),
-				`ls "${remoteDir}\\${base}.*"`,
+				`ls "${remoteDir}\\${base}*"`,
 			]);
 			// Nothing is removed from the server until the share lists each file at its full size.
 			for (const f of files) {
 				const listed = new RegExp(`^\\s+${f.remote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+\\w*\\s+(\\d+)\\s`, 'm').exec(out);
 				if (!listed || Number(listed[1]) !== f.size) throw new ArchiveError(`Could not archive "${entry.title}": ${explain(out)}.`);
 			}
-			if (entry.audio_file) await rm(path.join(this.audioDir, path.basename(entry.audio_file)), { force: true });
+			for (const a of audio) await rm(path.join(this.audioDir, path.basename(a.file)), { force: true });
+			this.db.prepare('DELETE FROM entry_audio WHERE entry_id = ?').run(entry.id);
 			const t = now();
-			this.db.prepare("UPDATE entries SET body = '', audio_file = NULL, audio_bytes = NULL, audio_sha256 = NULL, audio_error = NULL, archived_at = ?, archive_path = ?, updated_at = ? WHERE id = ?")
+			this.db.prepare("UPDATE entries SET body = '', archived_at = ?, archive_path = ?, updated_at = ? WHERE id = ?")
 				.run(t, `${parts.join('/')}/${base}.txt`, t, entry.id);
 			this.log.info(`archived entry ${entry.id} to ${parts.join('/')}/${base}`);
 		} finally {

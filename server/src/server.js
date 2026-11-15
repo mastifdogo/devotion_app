@@ -44,18 +44,27 @@ function parseRefs(text) {
 	}
 }
 
-export function entryJson(row) {
+/**
+ * One entry as the app sees it. `audio` lists every voice the entry can be
+ * heard in; has_audio / audio_bytes / audio_sha256 describe the default voice,
+ * for apps from before there was a choice.
+ */
+export function entryJson(row, audio = [], defaultVoice = '') {
+	const main = audio.find((a) => a.voice === defaultVoice) || audio[0];
 	return {
 		id: row.id,
+		kind: row.kind || 'devotion',
+		lesson_number: row.lesson_number ?? null,
 		title: row.title,
 		entry_date: row.entry_date,
 		scripture: row.scripture,
 		summary: row.summary ?? '',
 		body: row.body,
 		references: parseRefs(row.refs),
-		has_audio: Boolean(row.audio_file),
-		audio_bytes: row.audio_bytes ?? 0,
-		audio_sha256: row.audio_sha256,
+		has_audio: Boolean(main),
+		audio_bytes: main?.bytes ?? 0,
+		audio_sha256: main?.sha256 ?? null,
+		audio: audio.map((a) => ({ voice: a.voice, bytes: a.bytes, sha256: a.sha256 })),
 		source_from: row.source_from,
 		source_subject: row.source_subject,
 		created_at: row.created_at,
@@ -165,13 +174,28 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		pipeline: { ...pipeline.status, not_ready: pipeline.notReady(), audio_not_ready: tts.notReady() },
 		can_install_updates: updater.canInstall(),
 		password_fixed: Boolean(config.adminPassword),
-		entries: db.prepare('SELECT id, title, entry_date, scripture, audio_file, audio_bytes, audio_error, source_subject, created_at FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY COALESCE(entry_date, created_at) DESC, id DESC LIMIT 100').all()
-			.map((e) => ({ ...e, has_audio: Boolean(e.audio_file), audio_file: undefined })),
+		entries: db.prepare(`SELECT id, kind, lesson_number, title, entry_date, scripture, source_subject, created_at,
+				(SELECT COUNT(*) FROM entry_audio a WHERE a.entry_id = e.id AND a.file IS NOT NULL) AS audio_count,
+				(SELECT COALESCE(SUM(bytes), 0) FROM entry_audio a WHERE a.entry_id = e.id AND a.file IS NOT NULL) AS audio_bytes,
+				(SELECT error FROM entry_audio a WHERE a.entry_id = e.id AND a.error IS NOT NULL LIMIT 1) AS audio_error
+			FROM entries e WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY COALESCE(entry_date, created_at) DESC, id DESC LIMIT 100`).all(),
+		voice_count: tts.voiceList().length,
 		messages: db.prepare('SELECT * FROM messages ORDER BY processed_at DESC LIMIT 30').all(),
 		profiles: db.prepare(`SELECT p.id, p.name, p.created_at, (SELECT COUNT(*) FROM annotations a WHERE a.profile_id = p.id AND a.deleted = 0) AS notes FROM profiles p ORDER BY p.name`).all(),
 		bibles: bibles.list(),
 		archive: { ...archiver.status, configured: archiver.configured(), running: archiver.running, waiting: archiver.due().length, archived_total: db.prepare('SELECT COUNT(*) AS n FROM entries WHERE archived_at IS NOT NULL AND deleted_at IS NULL').get().n },
 	});
+
+	const audioRows = db.prepare('SELECT voice, file, bytes, sha256 FROM entry_audio WHERE entry_id = ? AND file IS NOT NULL ORDER BY voice');
+	const withAudio = (rows) => {
+		const byEntry = new Map();
+		for (const a of db.prepare('SELECT entry_id, voice, file, bytes, sha256 FROM entry_audio WHERE file IS NOT NULL ORDER BY voice').all()) {
+			if (!byEntry.has(a.entry_id)) byEntry.set(a.entry_id, []);
+			byEntry.get(a.entry_id).push(a);
+		}
+		const def = tts.defaultVoiceId();
+		return rows.map((r) => entryJson(r, r.deleted_at || r.archived_at ? [] : byEntry.get(r.id) || [], def));
+	};
 
 	const routes = [];
 	const route = (method, pattern, handler) => routes.push({ method, pattern, handler });
@@ -190,19 +214,27 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		} else {
 			rows = db.prepare('SELECT * FROM entries WHERE deleted_at IS NULL ORDER BY id').all();
 		}
-		send(res, 200, { entries: rows.map(entryJson), server_time: serverTime });
+		send(res, 200, { entries: withAudio(rows), server_time: serverTime });
 	});
 
 	route('GET', /^\/api\/entries\/(\d+)$/, (req, res, m) => {
 		const row = db.prepare('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL').get(Number(m[1]));
 		if (!row) throw new HttpError(404, 'No such entry.');
-		send(res, 200, entryJson(row));
+		send(res, 200, withAudio([row])[0]);
 	});
 
-	route('GET', /^\/api\/entries\/(\d+)\/audio$/, async (req, res, m) => {
-		const row = db.prepare('SELECT audio_file, audio_sha256 FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(Number(m[1]));
-		if (!row?.audio_file) throw new HttpError(404, 'This entry has no audio yet.');
-		const file = path.join(audioDir, path.basename(row.audio_file));
+	route('GET', /^\/api\/voices$/, (req, res) => {
+		send(res, 200, { voices: tts.voiceList(), default: tts.defaultVoiceId() || null });
+	});
+
+	// ?voice=<id> picks the voice; without it, the server's default voice.
+	route('GET', /^\/api\/entries\/(\d+)\/audio$/, async (req, res, m, url) => {
+		const live = db.prepare('SELECT 1 FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(Number(m[1]));
+		const rows = live ? audioRows.all(Number(m[1])) : [];
+		const wanted = url.searchParams.get('voice');
+		const row = wanted ? rows.find((r) => r.voice === wanted) : rows.find((r) => r.voice === tts.defaultVoiceId()) || rows[0];
+		if (!row) throw new HttpError(404, wanted ? 'This entry has no audio in that voice.' : 'This entry has no audio yet.');
+		const file = path.join(audioDir, path.basename(row.file));
 		const info = await stat(file).catch(() => null);
 		if (!info) throw new HttpError(404, 'The audio file is missing on the server.');
 		res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': info.size, etag: `"${row.audio_sha256}"`, 'cache-control': 'private, max-age=31536000, immutable' });
@@ -416,7 +448,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		if (blocked) throw new HttpError(409, blocked);
 		const entry = db.prepare('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL').get(Number(m[1]));
 		if (!entry) throw new HttpError(404, 'No such entry.');
-		pipeline.makeAudio(entry).catch(() => {});
+		pipeline.remakeAudio(entry).catch(() => {});
 		send(res, 202, { ok: true });
 	});
 
@@ -441,12 +473,27 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		log.error(`${what}: ${err.message}`);
 		lastBackgroundError = `${what}: ${err.message}`;
 	});
-	route('POST', /^\/admin\/api\/voices\/([A-Za-z0-9_-]+)\/(select|delete)$/, async (req, res, m) => {
+	// install: download a voice, after which every entry is also made in it.
+	// select: make it the default (what new listeners and older apps hear).
+	// delete: remove it and every entry's audio in it.
+	route('POST', /^\/admin\/api\/voices\/([A-Za-z0-9_-]+)\/(install|select|delete)$/, async (req, res, m) => {
 		requireAdmin(req);
 		await readJson(req);
-		if (m[2] === 'delete') await voices.remove(m[1]);
-		else if ((await voices.list()).find((v) => v.id === m[1])?.installed) await voices.select(m[1]);
-		else background(voices.select(m[1]), 'Voice download');
+		const [, id, action] = m;
+		const before = tts.defaultVoiceId();
+		if (action === 'delete') {
+			await voices.remove(id);
+			await pipeline.removeVoiceAudio(id);
+		} else if (voices.isInstalled(id)) {
+			if (action === 'select') await voices.select(id);
+		} else {
+			// Downloads run in the background; audio in the new voice follows.
+			background(voices[action](id).then(() => {
+				if (tts.defaultVoiceId() !== before) pipeline.touchAll();
+				return pipeline.fillAudio();
+			}), 'Voice download');
+		}
+		if (tts.defaultVoiceId() !== before) pipeline.touchAll();
 		send(res, 202, await adminState());
 	});
 

@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS annotations (
 	PRIMARY KEY (profile_id, id)
 );
 CREATE INDEX IF NOT EXISTS annotations_changed ON annotations(profile_id, server_updated_at);
+CREATE TABLE IF NOT EXISTS entry_audio (
+	entry_id INTEGER NOT NULL,
+	voice TEXT NOT NULL,             -- '' for audio made before voices were tracked; set at startup
+	file TEXT,                       -- null while it failed
+	bytes INTEGER,
+	sha256 TEXT,
+	error TEXT,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (entry_id, voice)
+);
 CREATE TABLE IF NOT EXISTS bibles (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -76,9 +86,14 @@ export function openDb(dataDir) {
 	// Columns added after the first release; a database made by an older
 	// version gets them here.
 	const have = new Set(db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name));
-	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT']]) {
+	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT'], ['kind', "TEXT NOT NULL DEFAULT 'devotion'"], ['lesson_number', 'INTEGER']]) {
 		if (!have.has(column)) db.exec(`ALTER TABLE entries ADD COLUMN ${column} ${type}`);
 	}
+	// Audio used to be one file per entry, in the entries table. It moves to
+	// entry_audio with an unknown voice, which the pipeline fills in at startup.
+	db.exec(`INSERT OR IGNORE INTO entry_audio (entry_id, voice, file, bytes, sha256, error, created_at)
+		SELECT id, '', audio_file, audio_bytes, audio_sha256, NULL, updated_at FROM entries WHERE audio_file IS NOT NULL;
+		UPDATE entries SET audio_file = NULL, audio_bytes = NULL, audio_sha256 = NULL WHERE audio_file IS NOT NULL;`);
 	return db;
 }
 

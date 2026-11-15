@@ -3,7 +3,8 @@
 // pinned by SHA-256, so a voice is exactly the one that was listed here.
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { access, mkdir, rename, rm, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline as pipe } from 'node:stream/promises';
 import path from 'node:path';
@@ -31,8 +32,6 @@ export class VoiceError extends Error {
 	}
 }
 
-const exists = (p) => access(p).then(() => true, () => false);
-
 export class Voices {
 	constructor({ settings, dataDir, fetchImpl = fetch, catalog = VOICES }) {
 		this.settings = settings;
@@ -46,29 +45,60 @@ export class Voices {
 		return path.join(this.dir, `${id}.onnx`);
 	}
 
-	/** The model file Piper should use right now. */
-	async modelPath() {
+	/** The voice that ships with the server (its model file's name), or '' without one. */
+	builtInId() {
+		const model = this.settings.get('piper_model');
+		return model ? path.basename(model, '.onnx') : '';
+	}
+
+	isInstalled(id) {
+		return Boolean(id) && (id === this.builtInId() || existsSync(this.file(id)));
+	}
+
+	/** The model file for a voice. */
+	pathFor(id) {
+		return id === this.builtInId() ? this.settings.get('piper_model') : this.file(id);
+	}
+
+	/**
+	 * Every voice on the server. Each entry's audio is made in all of them;
+	 * the app lets each person pick which one they listen to.
+	 */
+	installed() {
+		const builtIn = this.builtInId();
+		const out = this.catalog.filter((v) => this.isInstalled(v.id)).map((v) => ({ id: v.id, name: v.name, description: v.description }));
+		// A built-in model that isn't in the catalogue still counts, named after its file.
+		if (builtIn && !out.some((v) => v.id === builtIn)) out.unshift({ id: builtIn, name: builtIn, description: '' });
+		return out;
+	}
+
+	/** The server's default voice: what older apps and new listeners get first. */
+	defaultId() {
 		const chosen = this.settings.get('piper_voice');
-		if (chosen && (await exists(this.file(chosen)))) return this.file(chosen);
-		return this.settings.get('piper_model');
+		if (chosen && this.isInstalled(chosen)) return chosen;
+		return this.builtInId() || this.installed()[0]?.id || '';
 	}
 
 	async list() {
-		const builtIn = path.basename(this.settings.get('piper_model'), '.onnx');
-		const chosen = this.settings.get('piper_voice') || builtIn;
-		return Promise.all(this.catalog.map(async (v) => {
-			const installed = v.id === builtIn || (await exists(this.file(v.id)));
+		const builtIn = this.builtInId();
+		const chosen = this.defaultId();
+		return this.catalog.map((v) => {
+			const installed = this.isInstalled(v.id);
 			return { id: v.id, name: v.name, description: v.description, installed, built_in: v.id === builtIn, downloading: this.busy.has(v.id), selected: installed && v.id === chosen };
-		}));
+		});
 	}
 
-	/** Makes a voice the one in use, downloading it first if needed. */
-	async select(id) {
+	/** Downloads a voice so that audio is also made in it. */
+	async install(id) {
 		const voice = this.catalog.find((v) => v.id === id);
 		if (!voice) throw new VoiceError('No such voice.', 404);
-		const builtIn = path.basename(this.settings.get('piper_model'), '.onnx');
-		if (id !== builtIn && !(await exists(this.file(id)))) await this.download(voice);
-		this.settings.set('piper_voice', id === builtIn ? '' : id);
+		if (!this.isInstalled(id)) await this.download(voice);
+	}
+
+	/** Makes a voice the server's default, downloading it first if needed. */
+	async select(id) {
+		await this.install(id);
+		this.settings.set('piper_voice', id === this.builtInId() ? '' : id);
 	}
 
 	async download(voice) {
@@ -102,6 +132,7 @@ export class Voices {
 
 	async remove(id) {
 		if (!this.catalog.some((v) => v.id === id)) throw new VoiceError('No such voice.', 404);
+		if (id === this.builtInId()) throw new VoiceError('The voice installed with the server can\'t be removed.', 409);
 		if (this.settings.get('piper_voice') === id) this.settings.set('piper_voice', '');
 		await rm(this.file(id), { force: true });
 		await rm(this.file(id) + '.json', { force: true });

@@ -37,8 +37,10 @@ Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entri
    - **Gmail**: the OAuth client and the keywords (see below).
    - **Reading the emails**: your Anthropic API key.
    - **Audio**: works as installed (the Piper voice runs inside the container).
-     Choose among several voices (others are downloaded when chosen) and a
-     speaking pace; an OpenAI-compatible speech API can be used instead.
+     Download more voices and every entry is read in each of them; each person
+     picks their voice in the app, and the default voice is what they hear
+     until they do. There is also a speaking pace, and an OpenAI-compatible
+     speech API can be used instead.
    - **Android app**: shows the address to type into the app, and the people
      who have connected.
    - **Bible versions**: which public-domain translations the server stores
@@ -99,7 +101,10 @@ Gmail search syntax, for example `from:daily@example.org newer_than:30d`.
 
 Each matching email is read once. Claude returns the devotion(s) in it as
 entries (title, date, scripture reference, a short summary, full text, and
-every Bible reference in the text so the app can link it to the passage) and
+every Bible reference in the text so the app can link it to the passage). It
+also sorts each one as a **daily reading** (labelled in the app with its day),
+a numbered **lesson** (labelled with the lesson number and the date it is
+for), or anything else; the app shows each sort on its own tab. Claude
 leaves out the newsletter material around them; an email with no devotion in
 it creates nothing. The *Emails read* table shows what happened to each one.
 

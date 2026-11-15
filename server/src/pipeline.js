@@ -124,15 +124,15 @@ export class Pipeline {
 			}
 			if (message.text.length > MAX_EMAIL_CHARS) throw Object.assign(new Error(`The email is too long (${message.text.length} characters).`), { retryable: false });
 			const entries = await this.extractor.extract(message);
-			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, title, entry_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+			const insert = this.db.prepare(`INSERT INTO entries (gmail_id, position, kind, lesson_number, title, entry_date, scripture, summary, body, refs, source_from, source_subject, received_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 			this.db.exec('BEGIN');
 			try {
 				// A retry after a half-finished attempt must not leave duplicates.
 				this.db.prepare('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE gmail_id = ? AND deleted_at IS NULL').run(now(), now(), id);
 				entries.forEach((e, i) => {
 					const t = now();
-					insert.run(id, i, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
+					insert.run(id, i, e.kind || 'devotion', e.lesson_number ?? null, e.title, e.entry_date || (message.date ? message.date.slice(0, 10) : null), e.scripture, e.summary, e.body, JSON.stringify(e.references || []), message.from, message.subject, message.date, t, t);
 				});
 				record.run(id, message.subject, message.from, message.date, entries.length ? 'done' : 'skipped', entries.length ? null : 'No devotion found in this email.', attempts + 1, now());
 				this.db.exec('COMMIT');
@@ -152,35 +152,125 @@ export class Pipeline {
 		}
 	}
 
-	/** Makes audio for entries that have none yet. Returns how many were made. */
+	/** Gives audio from before voices were tracked the voice it was made in. */
+	adoptLegacyAudio() {
+		const voice = this.tts.defaultVoiceId();
+		if (!voice) return;
+		this.db.prepare("UPDATE OR IGNORE entry_audio SET voice = ? WHERE voice = ''").run(voice);
+	}
+
+	/**
+	 * Makes the audio each live entry is missing, in every voice on the server.
+	 * Only one of these runs at a time; a call while one runs makes it go round
+	 * again, so a voice added meanwhile is not missed. Returns how many files were made.
+	 */
 	async fillAudio({ retryFailed = false } = {}) {
-		if (this.tts.notReady()) return 0;
-		const rows = this.db.prepare(`SELECT * FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL AND audio_file IS NULL ${retryFailed ? '' : 'AND audio_error IS NULL'} ORDER BY id`).all();
+		if (this.audioBusy) {
+			this.audioAgain = true;
+			this.audioRetry ||= retryFailed;
+			return 0;
+		}
+		this.audioBusy = true;
 		let made = 0;
-		for (const entry of rows) if (await this.makeAudio(entry)) made++;
+		try {
+			do {
+				this.audioAgain = false;
+				const retry = retryFailed || this.audioRetry;
+				this.audioRetry = false;
+				made += await this.fillAudioOnce(retry);
+			} while (this.audioAgain);
+		} finally {
+			this.audioBusy = false;
+		}
 		return made;
 	}
 
-	async makeAudio(entry) {
+	async fillAudioOnce(retryFailed) {
+		if (this.tts.notReady()) return 0;
+		this.adoptLegacyAudio();
+		const voices = this.tts.voiceList();
+		const entries = this.db.prepare('SELECT * FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY id').all();
+		const have = this.db.prepare('SELECT file, error FROM entry_audio WHERE entry_id = ? AND voice = ?');
+		let made = 0;
+		// Voice by voice, so every entry is listenable in the default voice first.
+		const order = [...voices].sort((x, y) => (y.id === this.tts.defaultVoiceId()) - (x.id === this.tts.defaultVoiceId()));
+		for (const voice of order) {
+			for (const entry of entries) {
+				const row = have.get(entry.id, voice.id);
+				if (row?.file || (row?.error && !retryFailed)) continue;
+				if (await this.makeAudio(entry, voice.id)) made++;
+			}
+		}
+		return made;
+	}
+
+	/** Makes (or remakes) one entry's audio in one voice. */
+	async makeAudio(entry, voiceId = this.tts.defaultVoiceId()) {
+		const old = this.db.prepare('SELECT file FROM entry_audio WHERE entry_id = ? AND voice = ?').get(entry.id, voiceId);
 		try {
 			// A new file name each time, so a cached copy is never mistaken for the new audio.
-			const audio = await this.tts.synthesize(`${entry.id}-${Date.now().toString(36)}`, speechText(entry));
-			if (entry.audio_file) await rm(path.join(this.audioDir, entry.audio_file), { force: true });
-			this.db.prepare('UPDATE entries SET audio_file = ?, audio_bytes = ?, audio_sha256 = ?, audio_error = NULL, updated_at = ? WHERE id = ?').run(audio.file, audio.bytes, audio.sha256, now(), entry.id);
+			const safeVoice = voiceId.replace(/[^A-Za-z0-9_-]/g, '_');
+			const audio = await this.tts.synthesize(`${entry.id}-${safeVoice}-${Date.now().toString(36)}`, speechText(entry), voiceId);
+			// The entry may have been archived or deleted while this ran.
+			const live = this.db.prepare('SELECT 1 FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(entry.id);
+			if (!live) {
+				await rm(path.join(this.audioDir, audio.file), { force: true });
+				return false;
+			}
+			this.db.prepare(`INSERT INTO entry_audio (entry_id, voice, file, bytes, sha256, error, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)
+				ON CONFLICT(entry_id, voice) DO UPDATE SET file = excluded.file, bytes = excluded.bytes, sha256 = excluded.sha256, error = NULL, created_at = excluded.created_at`)
+				.run(entry.id, voiceId, audio.file, audio.bytes, audio.sha256, now());
+			if (old?.file) await rm(path.join(this.audioDir, old.file), { force: true });
+			this.touch(entry.id);
 			return true;
 		} catch (err) {
-			this.log.error(`audio for entry ${entry.id}: ${err.message}`);
-			this.db.prepare('UPDATE entries SET audio_error = ?, updated_at = ? WHERE id = ?').run(err.message, now(), entry.id);
+			this.log.error(`audio for entry ${entry.id} (${voiceId}): ${err.message}`);
+			this.db.prepare(`INSERT INTO entry_audio (entry_id, voice, file, bytes, sha256, error, created_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)
+				ON CONFLICT(entry_id, voice) DO UPDATE SET error = excluded.error`).run(entry.id, voiceId, err.message, now());
 			return false;
 		}
+	}
+
+	/** Remakes one entry's audio in every voice (after a change of pace, say). */
+	async remakeAudio(entry) {
+		let made = 0;
+		for (const voice of this.tts.voiceList()) if (await this.makeAudio(entry, voice.id)) made++;
+		return made;
+	}
+
+	/** Drops a voice's audio from every entry, after the voice was removed. */
+	async removeVoiceAudio(voiceId) {
+		const rows = this.db.prepare('SELECT entry_id, file FROM entry_audio WHERE voice = ?').all(voiceId);
+		for (const row of rows) if (row.file) await rm(path.join(this.audioDir, row.file), { force: true });
+		this.db.prepare('DELETE FROM entry_audio WHERE voice = ?').run(voiceId);
+		for (const row of rows) this.touch(row.entry_id);
+		return rows.length;
+	}
+
+	/** Removes all of an entry's audio files and records. */
+	async dropAudio(entryId) {
+		for (const row of this.db.prepare('SELECT file FROM entry_audio WHERE entry_id = ?').all(entryId)) {
+			if (row.file) await rm(path.join(this.audioDir, row.file), { force: true });
+		}
+		this.db.prepare('DELETE FROM entry_audio WHERE entry_id = ?').run(entryId);
+	}
+
+	/** Marks an entry changed, so the app's next sync picks it up. */
+	touch(entryId) {
+		this.db.prepare('UPDATE entries SET updated_at = ? WHERE id = ?').run(now(), entryId);
+	}
+
+	/** When the default voice changes, older apps (which only know one audio file) re-download. */
+	touchAll() {
+		this.db.prepare('UPDATE entries SET updated_at = ? WHERE deleted_at IS NULL').run(now());
 	}
 
 	async deleteEntry(id) {
 		const entry = this.db.prepare('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL').get(id);
 		if (!entry) return false;
-		if (entry.audio_file) await rm(path.join(this.audioDir, entry.audio_file), { force: true });
+		await this.dropAudio(id);
 		// Kept as a tombstone so the app removes its cached copy on the next sync.
-		this.db.prepare("UPDATE entries SET deleted_at = ?, updated_at = ?, audio_file = NULL, audio_bytes = NULL, audio_sha256 = NULL, body = '', refs = NULL WHERE id = ?").run(now(), now(), id);
+		this.db.prepare("UPDATE entries SET deleted_at = ?, updated_at = ?, body = '', refs = NULL WHERE id = ?").run(now(), now(), id);
 		return true;
 	}
 

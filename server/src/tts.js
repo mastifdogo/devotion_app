@@ -16,7 +16,14 @@ export class TtsError extends Error {
 
 /** What the voice reads: the title, the reference, then the devotion. */
 export function speechText(entry) {
-	const parts = [entry.title.replace(/[.!?:]*$/, '') + '.'];
+	const parts = [];
+	if (entry.kind === 'lesson' && entry.lesson_number) parts.push(`Lesson ${entry.lesson_number}.`);
+	if (entry.kind === 'daily_reading' && /^\d{4}-\d{2}-\d{2}$/.test(entry.entry_date || '')) {
+		// "Sunday, November 15." — the year adds nothing when listening.
+		const day = new Date(entry.entry_date + 'T12:00:00Z');
+		parts.push(day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) + '.');
+	}
+	parts.push(entry.title.replace(/[.!?:]*$/, '') + '.');
 	if (entry.scripture) parts.push(entry.scripture.replace(/[.]*$/, '') + '.');
 	parts.push(entry.body);
 	return parts.join('\n\n');
@@ -82,6 +89,11 @@ function run(cmd, args, { input, timeoutMs = 15 * 60 * 1000 } = {}) {
 	});
 }
 
+/** A voice id for a speech-API voice: safe in a file name and a URL. */
+export function openaiVoiceId(voice) {
+	return 'api-' + (String(voice || 'default').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'default');
+}
+
 export class Tts {
 	constructor({ settings, audioDir, voices = null, fetchImpl = fetch, runImpl = run }) {
 		this.settings = settings;
@@ -95,17 +107,38 @@ export class Tts {
 		return this.settings.get('tts_provider');
 	}
 
+	/**
+	 * The voices audio is made in: every Piper voice on the server, or the one
+	 * voice of a speech API. Each is { id, name, description }.
+	 */
+	voiceList() {
+		const p = this.provider();
+		if (p === 'piper') return this.voices ? this.voices.installed() : this.settings.get('piper_model') ? [{ id: path.basename(this.settings.get('piper_model'), '.onnx'), name: 'Piper', description: '' }] : [];
+		if (p === 'openai') {
+			const voice = this.settings.get('tts_openai_voice');
+			return [{ id: openaiVoiceId(voice), name: voice, description: 'Speech service' }];
+		}
+		return [];
+	}
+
+	defaultVoiceId() {
+		const p = this.provider();
+		if (p === 'piper') return this.voices ? this.voices.defaultId() : this.voiceList()[0]?.id || '';
+		if (p === 'openai') return this.voiceList()[0].id;
+		return '';
+	}
+
 	/** Why audio can't be made right now, or null when it can. */
 	notReady() {
 		const p = this.provider();
 		if (p === 'none') return 'Audio is turned off.';
-		if (p === 'piper') return this.settings.get('piper_model') ? null : 'No piper voice model is configured.';
+		if (p === 'piper') return this.voiceList().length ? null : 'No piper voice model is configured.';
 		if (p === 'openai') return this.settings.get('tts_openai_key') ? null : 'No API key is set for the speech service.';
 		return `Unknown speech engine "${p}".`;
 	}
 
-	/** Writes <audioDir>/<name>.mp3 and returns { file, bytes, sha256 }. */
-	async synthesize(name, text) {
+	/** Writes <audioDir>/<name>.mp3 in the given voice and returns { file, bytes, sha256 }. */
+	async synthesize(name, text, voiceId = this.defaultVoiceId()) {
 		const blocked = this.notReady();
 		if (blocked) throw new TtsError(blocked);
 		await mkdir(this.audioDir, { recursive: true });
@@ -113,7 +146,7 @@ export class Tts {
 		const final = path.join(this.audioDir, file);
 		const tmp = final + '.part';
 		try {
-			if (this.provider() === 'piper') await this.piper(text, tmp);
+			if (this.provider() === 'piper') await this.piper(text, tmp, voiceId);
 			else await this.openai(text, tmp);
 			const data = await readFile(tmp);
 			if (data.length < 256) throw new TtsError('The speech engine produced an empty file.');
@@ -125,11 +158,11 @@ export class Tts {
 		}
 	}
 
-	async piper(text, outFile) {
+	async piper(text, outFile, voiceId) {
 		const wav = outFile + '.wav';
 		// Piper speaks one line at a time; a paragraph per line keeps natural pauses.
 		const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean).join('\n') + '\n';
-		const model = this.voices ? await this.voices.modelPath() : this.settings.get('piper_model');
+		const model = this.voices ? this.voices.pathFor(voiceId) : this.settings.get('piper_model');
 		// Piper stretches time: above 1 is slower.
 		const length = { slow: '1.18', normal: '1.0', fast: '0.87' }[this.settings.get('tts_rate')] || '1.0';
 		await this.run(this.settings.get('piper_bin'), ['--model', model, '--length_scale', length, '--sentence_silence', '0.35', '--output_file', wav], { input: lines });

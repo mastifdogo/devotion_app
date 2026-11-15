@@ -2,7 +2,8 @@
 // speech engine and GitHub. Everything in between is the real code.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -91,7 +92,7 @@ async function setup(t, { extractResult, github } = {}) {
 			const put = /^put "(.+)" "(.+)"$/.exec(command);
 			const ls = /^ls "(.+)"$/.exec(command);
 			if (put) share.files.set(put[2], readFileSync(put[1]));
-			else if (ls && ls[1].endsWith('.*')) {
+			else if (ls && ls[1].endsWith('*')) {
 				for (const [name, data] of share.files) if (name.startsWith(ls[1].slice(0, -1))) out += `  ${name.split('\\').pop()}      A   ${share.truncate ? 1 : data.length}  Sun Nov 15 12:00:00 2026\n`;
 			} else if (ls) out += `  ${ls[1].split('\\').pop()}                D        0  Sun Nov 15 12:00:00 2026\n\n\t\t151361008 blocks of size 1024. 94880016 blocks available\n`; // as the real program lists a folder
 		}
@@ -217,16 +218,20 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	const list = await (await call('/api/entries')).json();
 	assert.equal(list.entries.length, 1);
 	const entry = list.entries[0];
-	assert.deepEqual({ ...entry, id: 0, created_at: '', updated_at: '', audio_sha256: '' }, {
-		id: 0, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
+	assert.deepEqual({ ...entry, id: 0, created_at: '', updated_at: '', audio_sha256: '', audio: entry.audio.map((a) => ({ ...a, sha256: '' })) }, {
+		id: 0, kind: 'devotion', lesson_number: null, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
 		references: [{ start: 8, end: 16, book: 'Matthew', book_index: 39, chapter: 6, verse_start: 11, verse_end: null }],
-		has_audio: true, audio_bytes: 2048, audio_sha256: '', source_from: 'daily@example.org', source_subject: 'Daily <b>bread</b>', created_at: '', updated_at: '', archived: false, deleted: false,
+		has_audio: true, audio_bytes: 2048, audio_sha256: '', audio: [{ voice: 'voice', bytes: 2048, sha256: '' }], source_from: 'daily@example.org', source_subject: 'Daily <b>bread</b>', created_at: '', updated_at: '', archived: false, deleted: false,
 	});
 	const audio = await call(`/api/entries/${entry.id}/audio`);
 	assert.equal(audio.headers.get('content-type'), 'audio/mpeg');
 	const bytes = Buffer.from(await audio.arrayBuffer());
 	assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.audio_sha256);
+	assert.equal(entry.audio[0].sha256, entry.audio_sha256);
 	assert.equal((await call('/api/entries/999/audio')).status, 404);
+	assert.equal((await call(`/api/entries/${entry.id}/audio?voice=voice`)).status, 200);
+	assert.equal((await call(`/api/entries/${entry.id}/audio?voice=nobody`)).status, 404);
+	assert.deepEqual(await (await call('/api/voices')).json(), { voices: [{ id: 'voice', name: 'voice', description: '' }], default: 'voice' });
 
 	// Incremental sync: nothing new, then a deletion shows up as a tombstone.
 	assert.equal((await (await call(`/api/entries?since=${encodeURIComponent(list.server_time)}`)).json()).entries.length, 0);
@@ -237,6 +242,30 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.deepEqual(after.entries.map((e) => [e.id, e.deleted, e.has_audio, e.body]), [[entry.id, true, false, '']]);
 	assert.equal((await (await call('/api/entries')).json()).entries.length, 0);
 	assert.equal((await call(`/api/entries/${entry.id}/audio`)).status, 404);
+});
+
+test('a lesson is marked as one, with its number, its own date and its own audio intro', async (t) => {
+	const lesson = { kind: 'lesson', lesson_number: 11, title: 'Victory After Struggling', entry_date: '2026-11-15', scripture: 'Genesis 32:24-31; 1 Samuel 17:45-49', summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
+	const { call, calls, connectGmail } = await setup(t, { extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [lesson] }) });
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await connectGmail();
+	const [entry] = (await (await call('/api/entries')).json()).entries;
+	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date], ['lesson', 11, 'Victory After Struggling', '2026-11-15']);
+	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Lesson 11\.\nVictory After Struggling\.\nGenesis 32:24-31; 1 Samuel 17:45-49\.\n/);
+	const state = await (await call('/admin/api/state')).json();
+	assert.deepEqual(state.entries.map((e) => [e.kind, e.lesson_number]), [['lesson', 11]]);
+});
+
+test('a daily reading is marked as one, with its own date and the lesson it belongs to', async (t) => {
+	const reading = { kind: 'daily_reading', lesson_number: 11, title: 'The struggle is spiritual', entry_date: '2026-11-15', scripture: '2 Corinthians 10:4-6', summary: 'S.', body: 'For the weapons of our warfare are not carnal.', references: [] };
+	const { call, calls, connectGmail } = await setup(t, { extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [reading] }) });
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await connectGmail();
+	const [entry] = (await (await call('/api/entries')).json()).entries;
+	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date], ['daily_reading', 11, 'The struggle is spiritual', '2026-11-15']);
+	assert.match(calls.run.find((c) => c.cmd === 'piper').input, /^Sunday, November 15\.\nThe struggle is spiritual\.\n2 Corinthians 10:4-6\.\n/);
 });
 
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {
@@ -390,30 +419,103 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.equal((await call('/api/bibles/tst')).status, 404);
 });
 
-test('voices: download on choosing, checksum enforced, used for new audio', async (t) => {
-	const { call, calls, settings, connectGmail, dir } = await setup(t);
+test('voices: every entry is made in every voice, and the app chooses', async (t) => {
+	const { call, calls, settings, connectGmail, dir, pipeline, db } = await setup(t);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
 	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'daily', anthropic_api_key: 'sk', piper_model: '/opt/voices/builtin.onnx', tts_rate: 'slow' } });
 	let state = await (await call('/admin/api/state')).json();
 	assert.deepEqual(state.voices.map((v) => [v.id, v.installed, v.selected]), [['builtin', true, true], ['amy', false, false], ['bad', false, false]]);
-	const settle = async () => { for (let i = 0; i < 50; i++) { state = await (await call('/admin/api/state')).json(); if (state.voices.every((v) => !v.downloading) && i > 1) return; await new Promise((r) => setTimeout(r, 10)); } };
-	await call('/admin/api/voices/bad/select', { body: {} });
+	const errors = [];
+	const settle = async () => {
+		for (let i = 0; i < 100; i++) {
+			state = await (await call('/admin/api/state')).json();
+			if (state.background_error) errors.push(state.background_error);
+			if (state.voices.every((v) => !v.downloading) && !pipeline.audioBusy && i > 1) return;
+			await new Promise((r) => setTimeout(r, 10));
+		}
+	};
+
+	// One voice: the entry is made in it.
+	await connectGmail();
+	await settle();
+	const piperRuns = () => calls.run.filter((c) => c.cmd === 'piper').map((c) => [path.basename(c.args[1]), c.args[3]]);
+	assert.deepEqual(piperRuns(), [['builtin.onnx', '1.18']]);
+	const first = await (await call('/api/entries')).json();
+
+	// A download that fails its checksum adds nothing.
+	await call('/admin/api/voices/bad/install', { body: {} });
 	await settle();
 	assert.equal(state.voices.find((v) => v.id === 'bad').installed, false);
-	assert.equal(settings.get('piper_voice'), '');
-	await call('/admin/api/voices/amy/select', { body: {} });
+	assert.match(errors.join(' '), /checksum/);
+
+	// Downloading a voice makes the existing entry in it too, without changing the default.
+	await call('/admin/api/voices/amy/install', { body: {} });
 	await settle();
-	assert.deepEqual(state.voices.map((v) => [v.id, v.installed, v.selected]), [['builtin', true, false], ['amy', true, true], ['bad', false, false]]);
+	assert.deepEqual(state.voices.map((v) => [v.id, v.installed, v.selected]), [['builtin', true, true], ['amy', true, false], ['bad', false, false]]);
+	assert.deepEqual(piperRuns(), [['builtin.onnx', '1.18'], ['amy.onnx', '1.18']]);
+	assert.equal(piperRuns().length, 2);
+	assert.deepEqual(calls.run.find((c) => c.cmd === 'piper' && c.args[1].endsWith('amy.onnx')).args[1], path.join(dir, 'voices', 'amy.onnx'));
+	assert.deepEqual(state.entries.map((e) => [e.audio_count, state.voice_count]), [[2, 2]]);
+	const voicesNow = await (await call('/api/voices')).json();
+	assert.deepEqual(voicesNow, { voices: [{ id: 'builtin', name: 'Built in', description: 'ships with the server' }, { id: 'amy', name: 'Amy', description: 'female' }], default: 'builtin' });
+	// The app sees the new voice in an ordinary incremental sync.
+	const changed = (await (await call(`/api/entries?since=${encodeURIComponent(first.server_time)}`)).json()).entries;
+	assert.deepEqual(changed.map((e) => e.audio.map((a) => a.voice)), [['amy', 'builtin']]);
+	const [amy, builtin] = changed[0].audio;
+	const fetchSha = async (q) => createHash('sha256').update(Buffer.from(await (await call(`/api/entries/${changed[0].id}/audio${q}`)).arrayBuffer())).digest('hex');
+	assert.equal(await fetchSha('?voice=amy'), amy.sha256);
+	assert.equal(await fetchSha('?voice=builtin'), builtin.sha256);
+	assert.equal(await fetchSha(''), builtin.sha256); // the default voice
+	assert.equal(changed[0].audio_sha256, builtin.sha256);
 
-	await connectGmail();
-	const piper = calls.run.find((c) => c.cmd === 'piper');
-	assert.deepEqual(piper.args.slice(0, 4), ['--model', path.join(dir, 'voices', 'amy.onnx'), '--length_scale', '1.18']);
+	// Making amy the default changes what older apps get, and tells them.
+	const beforeDefault = (await (await call('/api/entries')).json()).server_time;
+	await new Promise((r) => setTimeout(r, 5));
+	state = await (await call('/admin/api/voices/amy/select', { body: {} })).json();
+	assert.equal(settings.get('piper_voice'), 'amy');
+	const afterDefault = (await (await call(`/api/entries?since=${encodeURIComponent(beforeDefault)}`)).json()).entries;
+	assert.equal(afterDefault[0].audio_sha256, amy.sha256);
+	assert.equal(await fetchSha(''), amy.sha256);
+	assert.equal(piperRuns().length, 2); // choosing a default makes nothing new
 
-	// Back to the built-in voice; the downloaded one can then be removed.
+	// "Redo audio" remakes every voice.
+	await call(`/admin/api/entries/${changed[0].id}/audio`, { body: {} });
+	await settle();
+	assert.equal(piperRuns().length, 4);
+
+	// The default can't be removed; another voice can, with its audio.
+	assert.equal((await call('/admin/api/voices/builtin/delete', { body: {} })).status, 409);
 	await call('/admin/api/voices/builtin/select', { body: {} });
-	assert.equal(settings.get('piper_voice'), '');
+	const beforeRemove = (await (await call('/api/entries')).json()).server_time;
+	await new Promise((r) => setTimeout(r, 5));
 	state = await (await call('/admin/api/voices/amy/delete', { body: {} })).json();
 	assert.equal(state.voices.find((v) => v.id === 'amy').installed, false);
+	const afterRemove = (await (await call(`/api/entries?since=${encodeURIComponent(beforeRemove)}`)).json()).entries;
+	assert.deepEqual(afterRemove.map((e) => e.audio.map((a) => a.voice)), [['builtin']]);
+	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entry_audio WHERE voice = 'amy'").get().n, 0);
+	assert.deepEqual(readdirSync(path.join(dir, 'audio')).filter((f) => f.includes('-amy-')), []);
+});
+
+test('audio made before voices were tracked is kept and given its voice', async () => {
+	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-legacy-'));
+	try {
+		// A database as version 0.1.0 left it: one audio file per entry, in the entries table.
+		const old = new DatabaseSync(path.join(dir, 'devotion.db'));
+		old.exec(`CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, gmail_id TEXT, position INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL, entry_date TEXT, scripture TEXT, summary TEXT, body TEXT NOT NULL, source_from TEXT, source_subject TEXT, audio_file TEXT, audio_bytes INTEGER, audio_sha256 TEXT, audio_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)`);
+		old.prepare("INSERT INTO entries (title, body, audio_file, audio_bytes, audio_sha256, created_at, updated_at) VALUES ('T', 'B', '1-x.mp3', 99, 'abc', '2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z')").run();
+		old.close();
+		const db = openDb(dir);
+		const settings = new Settings(db, {});
+		settings.applyForm({ piper_model: '/opt/voices/lessac.onnx' });
+		const tts = new Tts({ settings, audioDir: path.join(dir, 'audio'), voices: new Voices({ settings, dataDir: dir, catalog: [] }) });
+		const pipeline = new Pipeline({ db, settings, gmail: {}, extractor: {}, tts, audioDir: path.join(dir, 'audio'), log: quiet });
+		pipeline.adoptLegacyAudio();
+		assert.deepEqual(db.prepare('SELECT entry_id, voice, file, bytes, sha256 FROM entry_audio').all().map((r) => ({ ...r })), [{ entry_id: 1, voice: 'lessac', file: '1-x.mp3', bytes: 99, sha256: 'abc' }]);
+		assert.equal(db.prepare('SELECT audio_file FROM entries').get().audio_file, null);
+		db.close();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test('archive: old entries go to the share, and only then leave the server', async (t) => {
@@ -425,7 +527,7 @@ test('archive: old entries go to the share, and only then leave the server', asy
 	assert.equal(calls.smb.length, 0);
 	let entry = (await (await call('/api/entries')).json()).entries[0];
 	assert.deepEqual([entry.archived, entry.has_audio, entry.body], [false, true, 'Give us this day.']);
-	const audioFile = db.prepare('SELECT audio_file FROM entries').get().audio_file;
+	const audioFile = db.prepare('SELECT file FROM entry_audio').get().file;
 	const syncedAt = (await (await call('/api/entries')).json()).server_time;
 
 	assert.equal((await call('/admin/api/archive/test', { body: {} })).status, 400);
@@ -449,7 +551,7 @@ test('archive: old entries go to the share, and only then leave the server', asy
 	share.files.clear();
 	assert.equal(await archiver.runOnce(), 1);
 	const names = [...share.files.keys()];
-	assert.deepEqual(names, [`Devotion\\Old rm\\2025\\11\\2025-11-15_${entry.id}_Daily-Bread.txt`, `Devotion\\Old rm\\2025\\11\\2025-11-15_${entry.id}_Daily-Bread.mp3`]);
+	assert.deepEqual(names, [`Devotion\\Old rm\\2025\\11\\2025-11-15_${entry.id}_Daily-Bread.txt`, `Devotion\\Old rm\\2025\\11\\2025-11-15_${entry.id}_Daily-Bread_voice.mp3`]);
 	assert.match(share.files.get(names[0]).toString(), /^Daily Bread\n2025-11-15\nMatthew 6:11\n\nSummary: On provision\.\n\nGive us this day\.\n\nEmail: Daily <b>bread<\/b>/);
 	assert.equal(share.files.get(names[1]).length, 2048);
 	assert.ok(calls.smb.at(-1)[calls.smb.at(-1).indexOf('-c') + 1].startsWith('mkdir "Devotion"; mkdir "Devotion\\Old rm"; mkdir "Devotion\\Old rm\\2025"; mkdir "Devotion\\Old rm\\2025\\11"; put '));
