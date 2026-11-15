@@ -60,6 +60,51 @@ jobs:
           node --test test/smb.integration.test.js
           sudo ls -lR /srv/devotion-share | head -30
 
+  signing-key:
+    # Checks the Android signing secrets: the keystore decodes, both passwords
+    # and the alias are right, and it is the expected key. Builds nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # The release key's certificate fingerprint; releases must be signed with it.
+      EXPECTED_SHA256: 91:65:C3:64:C1:78:BF:FC:32:0B:DE:91:0A:1D:97:D3:00:5E:39:D6:4C:64:F5:65:8C:B2:BC:13:5B:2E:74:8E
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Check the signing secrets
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: releases are signed with a throwaway key."
+            exit 0
+          fi
+          for v in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [ -n "${!v}" ] || { echo "::error::The $v secret is missing."; exit 1; }
+          done
+          ks="$RUNNER_TEMP/release.jks"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ks" || { echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 (copy the whole line)."; exit 1; }
+          keytool -list -keystore "$ks" -storepass "$ANDROID_KEYSTORE_PASSWORD" >/dev/null 2>&1 \
+            || { echo "::error::ANDROID_KEYSTORE_PASSWORD does not open the keystore (or the keystore is damaged)."; exit 1; }
+          sha=$(keytool -list -v -keystore "$ks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" 2>/dev/null | awk '/SHA256:/ { print $2; exit }') \
+            || true
+          [ -n "$sha" ] || { echo "::error::The keystore has no key named by ANDROID_KEY_ALIAS."; exit 1; }
+          # Signing something proves the key password too.
+          echo test > "$RUNNER_TEMP/t.txt" && (cd "$RUNNER_TEMP" && jar cf t.jar t.txt)
+          jarsigner -keystore "$ks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEY_PASSWORD" "$RUNNER_TEMP/t.jar" "$ANDROID_KEY_ALIAS" >/dev/null \
+            || { echo "::error::ANDROID_KEY_PASSWORD is not the key's password."; exit 1; }
+          rm -f "$ks"
+          if [ "$sha" != "$EXPECTED_SHA256" ]; then
+            echo "::error::The keystore holds a different key (SHA-256 $sha) than the release key."
+            exit 1
+          fi
+          echo "Signing secrets are complete and hold the release key ($sha)."
+
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 30
