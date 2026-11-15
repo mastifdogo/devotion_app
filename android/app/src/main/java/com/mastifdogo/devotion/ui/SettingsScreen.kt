@@ -261,7 +261,7 @@ private fun PlaybackSection(vm: MainViewModel) {
     }
 }
 
-/** The app wallpaper: current one, strength, remove; the row opens the Wallpapers screen. */
+/** The app wallpaper: current one, text window opacity, remove; the row opens the Wallpapers screen. */
 @Composable
 private fun WallpaperSection(vm: MainViewModel) {
     SectionTitle("Wallpaper")
