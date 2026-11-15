@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Devotion server</title>
+<script>
+// Before the page paints, so a dark page never flashes white.
+try { const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --ok:#2f6f4f; --bad:#a23b3b; }
+:root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --ok:#7fc8a1; --bad:#e58a8a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --ok:#7fc8a1; --bad:#e58a8a; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, sans-serif; }
+main { max-width:52rem; margin:0 auto; padding:1rem 1rem 4rem; }
+header { display:flex; align-items:baseline; gap:.75rem; flex-wrap:wrap; margin:1rem 0; }
+h1 { font-size:1.4rem; margin:0; } h2 { font-size:1.05rem; margin:0 0 .6rem; }
+section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem; margin:0 0 1rem; }
+label { display:block; font-size:.85rem; color:var(--muted); margin:.6rem 0 .15rem; }
+input, select, textarea { width:100%; padding:.5rem .6rem; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+textarea { min-height:4.5rem; resize:vertical; }
+button { padding:.5rem .9rem; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:var(--card); font:inherit; cursor:pointer; }
+button.plain { background:transparent; color:var(--accent); } button.small { padding:.15rem .5rem; font-size:.85rem; }
+button:disabled { opacity:.5; cursor:default; }
+.row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(14rem, 1fr)); gap:0 1rem; }
+.muted { color:var(--muted); } .ok { color:var(--ok); } .bad { color:var(--bad); } .small { font-size:.85rem; }
+code, .mono { font-family:ui-monospace, monospace; font-size:.9em; overflow-wrap:anywhere; }
+table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:.4rem .5rem .4rem 0; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere; }
+th { font-size:.8rem; color:var(--muted); font-weight:500; border-top:0; }
+.scroll { overflow-x:auto; } pre { white-space:pre-wrap; margin:.5rem 0 0; font-size:.85rem; }
+#toast { position:fixed; left:50%; bottom:1rem; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:.6rem 1rem; border-radius:8px; max-width:90vw; display:none; }
+[hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+<header><h1>Devotion server</h1><span class="muted" id="version"></span><span style="flex:1"></span>
+	<select id="theme" aria-label="Colour theme" style="width:auto;padding:.15rem .4rem;font-size:.85rem"><option value="auto">Theme: system</option><option value="light">Theme: light</option><option value="dark">Theme: dark</option></select>
+	<button class="plain small" id="logout" hidden>Log out</button></header>
+
+<section id="setup" hidden>
+	<h2>Welcome</h2>
+	<p>This server is new. Choose the password that protects this page; everything else is set up here afterwards.</p>
+	<form id="setup-form">
+		<label for="new-password">Admin password (at least 8 characters)</label>
+		<input id="new-password" type="password" autocomplete="new-password" minlength="8" required>
+		<label for="new-password2">The same password again</label>
+		<input id="new-password2" type="password" autocomplete="new-password" minlength="8" required>
+		<div class="row"><button>Start</button><span class="bad" id="setup-error"></span></div>
+	</form>
+</section>
+
+<section id="login" hidden>
+	<h2>Log in</h2>
+	<form id="login-form">
+		<label for="password">Admin password</label>
+		<input id="password" type="password" autocomplete="current-password" required>
+		<div class="row"><button>Log in</button><span class="bad" id="login-error"></span></div>
+	</form>
+</section>
+
+<div id="app" hidden>
+<section>
+	<h2>Status</h2>
+	<div id="status"></div>
+	<div class="row"><button id="run">Check mail now</button><button class="plain" id="retry-audio">Retry failed audio</button></div>
+</section>
+
+<section>
+	<h2>Gmail</h2>
+	<p id="gmail-status"></p>
+	<div class="grid">
+		<div><label for="google_client_id">Google OAuth client ID</label><input id="google_client_id" data-setting autocomplete="off"></div>
+		<div><label for="google_client_secret">Client secret</label><input id="google_client_secret" data-setting data-secret type="password" autocomplete="off"></div>
+	</div>
+	<label for="public_url">This server's public https address (optional)</label>
+	<input id="public_url" data-setting placeholder="https://devotion.example.net" autocomplete="off">
+	<p class="small muted">Add this exact redirect URI to the OAuth client in Google Cloud: <code id="redirect-uri"></code></p>
+	<label for="gmail_keywords">Keywords: only emails containing at least one of these are imported (one per line)</label>
+	<textarea id="gmail_keywords" data-setting placeholder="Daily Devotion&#10;Morning Prayer"></textarea>
+	<label for="gmail_query">Extra Gmail filter (optional)</label>
+	<input id="gmail_query" data-setting placeholder="from:daily@example.org newer_than:30d" autocomplete="off">
+	<label for="poll_minutes">Check every (minutes)</label>
+	<input id="poll_minutes" data-setting inputmode="numeric" style="max-width:8rem">
+	<div class="row"><button data-save>Save</button><button class="plain" id="connect">Connect Gmail</button><button class="plain" id="disconnect" hidden>Disconnect</button></div>
+	<div id="paste" hidden>
+		<p class="small">Approve access in the tab that opened. If the browser then shows an error page at an address starting with <code>http://localhost</code>, that is expected: copy the whole address from the address bar and paste it here.</p>
+		<input id="paste-url" placeholder="http://localhost:8787/oauth/callback?state=…&code=…" autocomplete="off">
+		<div class="row"><button id="paste-go">Finish connecting</button></div>
+	</div>
+</section>
+
+<section>
+	<h2>Reading the emails (Claude)</h2>
+	<div class="grid">
+		<div><label for="anthropic_api_key">Anthropic API key</label><input id="anthropic_api_key" data-setting data-secret type="password" autocomplete="off"></div>
+		<div><label for="claude_model">Model</label><input id="claude_model" data-setting autocomplete="off"></div>
+	</div>
+	<label for="extract_instructions">Notes about your emails (optional)</label>
+	<textarea id="extract_instructions" data-setting placeholder="e.g. Skip the 'From the editor' section. The date is in the subject line."></textarea>
+	<div class="row"><button data-save>Save</button></div>
+</section>
+
+<section>
+	<h2>Audio</h2>
+	<label for="tts_provider">Voice engine</label>
+	<select id="tts_provider" data-setting>
+		<option value="piper">Piper (runs on this server)</option>
+		<option value="openai">OpenAI-compatible speech API</option>
+		<option value="none">No audio</option>
+	</select>
+	<div data-for="piper">
+		<label for="piper_model">Piper voice model file</label><input id="piper_model" data-setting autocomplete="off">
+	</div>
+	<div data-for="openai" class="grid">
+		<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
+		<div><label for="tts_openai_key">API key</label><input id="tts_openai_key" data-setting data-secret type="password" autocomplete="off"></div>
+		<div><label for="tts_openai_model">Model</label><input id="tts_openai_model" data-setting autocomplete="off"></div>
+		<div><label for="tts_openai_voice">Voice</label><input id="tts_openai_voice" data-setting autocomplete="off"></div>
+	</div>
+	<div class="row"><button data-save>Save</button></div>
+</section>
+
+<section>
+	<h2>Android app</h2>
+	<p class="small muted">Enter these in the app's settings.</p>
+	<table><tr><th>Server address</th><td class="mono" id="app-url"></td></tr><tr><th>API token</th><td class="mono" id="app-token"></td></tr></table>
+	<div class="row"><button class="plain" id="rotate">New token</button></div>
+</section>
+
+<section>
+	<h2>Entries</h2>
+	<div class="scroll"><table id="entries"></table></div>
+</section>
+
+<section>
+	<h2>Emails read</h2>
+	<div class="scroll"><table id="messages"></table></div>
+</section>
+
+<section>
+	<h2>Updates</h2>
+	<p class="small muted">GitHub is only asked when you press the button.</p>
+	<div class="row"><button id="check-update">Check for updates</button><button id="install-update" hidden>Install</button></div>
+	<div id="update-result"></div>
+	<label for="github_token">GitHub token (only needed if the repository is private)</label>
+	<input id="github_token" data-setting data-secret type="password" autocomplete="off">
+	<div class="row"><button data-save>Save</button></div>
+</section>
+
+<section id="password-section">
+	<h2>Admin password</h2>
+	<form id="password-form">
+		<div class="grid">
+			<div><label for="pw-current">Current password</label><input id="pw-current" type="password" autocomplete="current-password" required></div>
+			<div><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required></div>
+		</div>
+		<div class="row"><button>Change password</button></div>
+	</form>
+</section>
+</div>
+</main>
+<div id="toast" role="status"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+let state = null, poll = null, pendingTag = null;
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 5000); }
+
+async function api(path, body) {
+	const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+	const json = await res.json().catch(() => ({}));
+	if (res.status === 401 && path !== '/admin/api/login') { showLogin(); throw new Error('Log in first.'); }
+	if (!res.ok) throw new Error(json.error || 'Request failed (' + res.status + ')');
+	return json;
+}
+const act = (fn) => async (ev) => { ev?.preventDefault?.(); try { await fn(ev); } catch (err) { toast(err.message); } };
+
+function showLogin() { $('login').hidden = false; $('setup').hidden = true; $('app').hidden = true; $('logout').hidden = true; clearInterval(poll); }
+function showSetup() { $('setup').hidden = false; $('login').hidden = true; $('app').hidden = true; $('logout').hidden = true; }
+function startPolling() { clearInterval(poll); poll = setInterval(() => load(false).catch(() => {}), 8000); }
+const when = (iso) => iso ? new Date(iso).toLocaleString() : 'never';
+
+function fillForm() {
+	for (const input of document.querySelectorAll('[data-setting]')) {
+		if (input.dataset.secret !== undefined) { input.value = ''; input.placeholder = state.settings[input.id + '_set'] ? 'saved (leave empty to keep)' : 'not set'; }
+		else input.value = state.settings[input.id] ?? '';
+	}
+	showEngine();
+}
+function showEngine() { for (const d of document.querySelectorAll('[data-for]')) d.hidden = d.dataset.for !== $('tts_provider').value; }
+
+function render() {
+	$('version').textContent = 'version ' + state.version;
+	const p = state.pipeline, s = $('status'); s.replaceChildren();
+	if (p.not_ready) s.append(el('p', 'Not reading mail yet: ' + p.not_ready, 'bad'));
+	else s.append(el('p', p.running ? 'Checking mail now…' : 'Ready. Last check: ' + when(p.last_run), 'ok'));
+	if (!p.not_ready && p.last_error) s.append(el('p', 'Last check failed: ' + p.last_error, 'bad'));
+	if (p.last_result && !p.last_error) s.append(el('p', `Last check: ${p.last_result.found} matching emails, ${p.last_result.processed} new, ${p.last_result.errors} failed, ${p.last_result.audio} audio files made.`, 'muted small'));
+	if (p.audio_not_ready && state.settings.tts_provider !== 'none') s.append(el('p', 'No audio is being made: ' + p.audio_not_ready, 'bad'));
+
+	const g = state.gmail;
+	$('gmail-status').textContent = g.connected ? 'Connected as ' + (g.email || 'unknown') + '.' : g.configured ? 'Not connected yet.' : 'Enter the OAuth client ID and secret, save, then connect.';
+	$('gmail-status').className = g.connected ? 'ok' : 'muted';
+	$('redirect-uri').textContent = g.redirect_uri;
+	$('connect').textContent = g.connected ? 'Reconnect Gmail' : 'Connect Gmail';
+	$('disconnect').hidden = !g.connected;
+	$('app-url').textContent = location.origin; $('app-token').textContent = state.app_token;
+
+	const et = $('entries'); et.replaceChildren();
+	if (!state.entries.length) et.append(el('caption', 'No entries yet.', 'muted'));
+	else {
+		const head = el('tr'); for (const h of ['Date', 'Title', 'Audio', '']) head.append(el('th', h)); et.append(head);
+		for (const e of state.entries) {
+			const tr = el('tr');
+			tr.append(el('td', e.entry_date || e.created_at.slice(0, 10)));
+			const title = el('td', e.title); if (e.scripture) title.append(el('div', e.scripture, 'muted small')); tr.append(title);
+			const audio = el('td', e.has_audio ? Math.round(e.audio_bytes / 1024) + ' kB' : e.audio_error ? 'failed' : 'none', e.audio_error ? 'bad' : '');
+			if (e.audio_error) audio.title = e.audio_error; tr.append(audio);
+			const actions = el('td');
+			const redo = el('button', 'Redo audio', 'plain small'); redo.onclick = act(async () => { await api(`/admin/api/entries/${e.id}/audio`, {}); toast('Making audio…'); });
+			const del = el('button', 'Delete', 'plain small'); del.onclick = act(async () => { if (confirm('Delete "' + e.title + '"? It is also removed from the app.')) { state = await api(`/admin/api/entries/${e.id}/delete`, {}); render(); } });
+			actions.append(redo, ' ', del); tr.append(actions); et.append(tr);
+		}
+	}
+	const mt = $('messages'); mt.replaceChildren();
+	if (!state.messages.length) mt.append(el('caption', 'Nothing read yet.', 'muted'));
+	else {
+		const head = el('tr'); for (const h of ['Read', 'Subject', 'Result', '']) head.append(el('th', h)); mt.append(head);
+		for (const m of state.messages) {
+			const tr = el('tr');
+			tr.append(el('td', when(m.processed_at), 'small'));
+			const subj = el('td', m.subject || '(no subject)'); subj.append(el('div', m.sender || '', 'muted small')); tr.append(subj);
+			const result = el('td', m.status === 'done' ? 'entry made' : m.status, m.status === 'error' ? 'bad' : ''); if (m.error) result.append(el('div', m.error, 'small muted')); tr.append(result);
+			const actions = el('td'); const again = el('button', 'Read again', 'plain small');
+			again.onclick = act(async () => { await api(`/admin/api/messages/${m.gmail_id}/retry`, {}); toast('Reading it again…'); });
+			actions.append(again); tr.append(actions); mt.append(tr);
+		}
+	}
+}
+
+async function load(refill) {
+	state = await api('/admin/api/state');
+	$('login').hidden = true; $('setup').hidden = true; $('app').hidden = false; $('logout').hidden = false;
+	$('password-section').hidden = state.password_fixed;
+	if (refill) fillForm();
+	render();
+}
+
+$('login-form').onsubmit = act(async () => {
+	$('login-error').textContent = '';
+	try { await api('/admin/api/login', { password: $('password').value }); } catch (err) { $('login-error').textContent = err.message; return; }
+	$('password').value = ''; await load(true); startPolling();
+});
+$('setup-form').onsubmit = act(async () => {
+	$('setup-error').textContent = '';
+	if ($('new-password').value !== $('new-password2').value) { $('setup-error').textContent = 'The two passwords differ.'; return; }
+	try { await api('/admin/api/setup', { password: $('new-password').value }); } catch (err) { $('setup-error').textContent = err.message; return; }
+	$('new-password').value = $('new-password2').value = ''; await load(true); startPolling();
+});
+$('password-form').onsubmit = act(async () => {
+	await api('/admin/api/password', { current: $('pw-current').value, password: $('pw-new').value });
+	$('pw-current').value = $('pw-new').value = ''; toast('Password changed.');
+});
+$('logout').onclick = act(async () => { await api('/admin/api/logout', {}); showLogin(); });
+$('tts_provider').onchange = showEngine;
+$('theme').value = document.documentElement.dataset.theme || 'auto';
+$('theme').onchange = () => {
+	const t = $('theme').value;
+	if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+	try { t === 'auto' ? localStorage.removeItem('theme') : localStorage.setItem('theme', t); } catch {}
+};
+for (const b of document.querySelectorAll('[data-save]')) b.onclick = act(save);
+async function save() {
+	const form = {}; for (const input of document.querySelectorAll('[data-setting]')) form[input.id] = input.value;
+	state = await api('/admin/api/settings', form); fillForm(); render(); toast('Saved.');
+}
+$('run').onclick = act(async () => { await api('/admin/api/run', {}); toast('Checking mail…'); setTimeout(() => load(false).catch(() => {}), 1500); });
+$('retry-audio').onclick = act(async () => { await api('/admin/api/audio/retry', {}); toast('Retrying audio…'); });
+$('rotate').onclick = act(async () => { if (confirm('Make a new token? The app stops syncing until you enter the new one.')) { state = await api('/admin/api/token/rotate', {}); render(); } });
+$('connect').onclick = act(async () => {
+	await save();
+	const { url } = await api('/admin/api/oauth/start', {});
+	$('paste').hidden = false; window.open(url, '_blank', 'noopener');
+});
+$('paste-go').onclick = act(async () => { const r = await api('/admin/api/oauth/complete', { url: $('paste-url').value }); $('paste').hidden = true; $('paste-url').value = ''; toast('Connected as ' + r.email); await load(false); });
+$('disconnect').onclick = act(async () => { if (confirm('Disconnect Gmail? No more emails are read until you connect again.')) { state = await api('/admin/api/oauth/disconnect', {}); render(); } });
+$('check-update').onclick = act(async () => {
+	const out = $('update-result'); out.replaceChildren(el('p', 'Asking GitHub…', 'muted')); $('install-update').hidden = true;
+	let r; try { r = await api('/admin/api/update/check'); } catch (err) { out.replaceChildren(el('p', err.message, 'bad')); return; }
+	out.replaceChildren(el('p', r.newer ? `Version ${r.latest} is available (this server runs ${r.current}).` : `This server is up to date (${r.current}).`, r.newer ? 'ok' : 'muted'));
+	if (r.newer) {
+		if (r.notes) out.append(el('pre', r.notes));
+		if (r.can_install) { pendingTag = r.tag; $('install-update').textContent = 'Install ' + r.latest; $('install-update').hidden = false; }
+		else out.append(el('p', 'This server was not installed from a release, so update it by hand.', 'muted small'));
+	}
+});
+$('install-update').onclick = act(async () => {
+	if (!confirm('Install ' + pendingTag + '? The server restarts when it is done.')) return;
+	await api('/admin/api/update/install', { tag: pendingTag }); $('install-update').hidden = true;
+	$('update-result').append(el('p', 'Installing. This page reconnects when the server is back; if the version above has not changed after a few minutes, see: journalctl -u devotion-update', 'muted'));
+});
+
+(async () => {
+	const session = await (await fetch('/admin/api/session')).json();
+	$('version').textContent = 'version ' + session.version;
+	if (session.needs_setup) return showSetup();
+	if (!session.logged_in) return showLogin();
+	await load(true); startPolling();
+})().catch((err) => toast(err.message));
+</script>
+</body>
+</html>

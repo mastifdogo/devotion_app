@@ -1,0 +1,17 @@
+# /etc/systemd/system/devotion-firstboot.service: runs once per container.
+[Unit]
+Description=Devotion first-boot setup (host keys, console message)
+ConditionPathExists=!/etc/devotion/provisioned
+After=local-fs.target
+Before=devotion.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/devotion-firstboot
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=multi-user.target

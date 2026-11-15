@@ -1,0 +1,172 @@
+# Tests, builds and publishes a GitHub Release. The server's and the Android
+# app's "Check for updates" buttons look at these releases.
+#
+# Run it by pushing a version tag (git tag v1.2.3 && git push origin v1.2.3),
+# or from the Actions tab: Release → Run workflow → enter a tag (it is created
+# on the selected branch's latest commit).
+#
+# Release assets:
+#   devotion-<tag>-linux-amd64.tar.gz        the server, its Node.js and deploy scripts
+#   debian-13-devotion_<tag>_amd64.tar.zst   Proxmox CT template
+#   devotion-<tag>.apk                       the Android app
+#   SHA256SUMS
+#
+# Repository secrets for the Android app (Settings → Secrets → Actions). An
+# update only installs over an app signed with the same key, so set these
+# once and keep the keystore safe; without them the APK is signed with a
+# throwaway key and every update needs an uninstall first.
+#   ANDROID_KEYSTORE_BASE64    base64 -w0 of the keystore file
+#   ANDROID_KEYSTORE_PASSWORD  ANDROID_KEY_ALIAS  ANDROID_KEY_PASSWORD
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create, e.g. v1.2.3 (a tag with a suffix, such as v1.2.3-rc.1, is published as a pre-release)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the release and upload assets
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+      SUITE: trixie # the Debian release the template is built on
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        run: |
+          if ! [[ "$VERSION" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::release tags must look like v1.2.3 or v1.2.3-rc.1 (got '$VERSION')"
+            exit 1
+          fi
+          if (( BASH_REMATCH[2] > 99 || BASH_REMATCH[3] > 99 )); then
+            echo "::error::minor and patch numbers must be below 100 (Android's version code is built from them)"
+            exit 1
+          fi
+          # Android compares version codes, so each release needs a larger one.
+          echo "APP_VERSION_NAME=${VERSION#v}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install image build tools
+        timeout-minutes: 10
+        run: deploy/lxc-template/ci-install-build-tools.sh "$SUITE"
+
+      - name: Test the server
+        run: make test
+
+      - name: Build the release tarball
+        run: make release VERSION="$VERSION"
+
+      - name: Build the LXC template
+        run: |
+          sudo deploy/lxc-template/build-lxc-template.sh --suite "$SUITE" --version "$VERSION" \
+            --release "dist/devotion-$VERSION-linux-amd64.tar.gz"
+          sudo chown -R "$(id -u):$(id -g)" dist
+
+      - name: Check the template
+        # Catches an image nobody could log in to, or one with shared secrets,
+        # before it is published.
+        run: |
+          pip install --quiet zstandard
+          python3 deploy/lxc-template/check-template.py dist/debian-*-devotion_"$VERSION"_amd64.tar.zst \
+            --require usr/local/bin/devotion --require opt/piper/piper
+
+      - name: Build the Android app
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
+            echo "APK_SIGNING=release" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: the APK is signed with a throwaway key, so it cannot be installed as an update over an earlier one."
+            echo "APK_SIGNING=throwaway" >> "$GITHUB_ENV"
+          fi
+          ./gradlew --no-daemon testReleaseUnitTest assembleRelease \
+            -PappVersionName="$APP_VERSION_NAME" -PappVersionCode="$APP_VERSION_CODE" -PgithubRepo="$GITHUB_REPOSITORY"
+          rm -f "$RUNNER_TEMP/release.jks"
+          cp app/build/outputs/apk/release/*.apk "../dist/devotion-$VERSION.apk"
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum devotion-"$VERSION"-linux-amd64.tar.gz debian-*-devotion_"$VERSION"_amd64.tar.zst devotion-"$VERSION".apk > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release notes
+        run: |
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
+          tpl=$(cd dist && ls debian-*-devotion_"$VERSION"_amd64.tar.zst)
+          sum=$(awk -v f="$tpl" '$2 == f { print $1 }' dist/SHA256SUMS)
+          signing=""
+          if [ "$APK_SIGNING" = throwaway ]; then
+            signing="This APK is signed with a one-off key: uninstall an earlier version before installing it."
+          fi
+          cat > notes.md <<EOF
+          ## Already running Devotion?
+
+          Server: admin page → **Updates** → *Check for updates* → *Install*.
+          Android app: **Settings** → *Check for updates*. $signing
+
+          ## New server: Proxmox LXC template
+
+          On the Proxmox host (as root):
+
+          \`\`\`sh
+          wget -P /var/lib/vz/template/cache $base/$tpl
+          echo "$sum  /var/lib/vz/template/cache/$tpl" | sha256sum -c
+          \`\`\`
+
+          Create an unprivileged container from it with **nesting** on and 1 GB of
+          memory, start it, and open \`http://<container-ip>:8787/\` in a browser.
+          The address is also shown on the container's console. Everything is set
+          up on that page; you choose the admin password on the first visit.
+
+          ## Android app
+
+          Download \`devotion-$VERSION.apk\` on the phone and open it.
+          EOF
+          cat notes.md
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(dist/devotion-"$VERSION"-linux-amd64.tar.gz dist/debian-*-devotion_"$VERSION"_amd64.tar.zst dist/devotion-"$VERSION".apk dist/SHA256SUMS)
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            # A re-run: replace the assets, keep the release.
+            gh release upload "$VERSION" "${assets[@]}" --clobber
+            gh release edit "$VERSION" --notes-file notes.md
+          else
+            prerelease=()
+            [[ "$VERSION" == *-* ]] && prerelease=(--prerelease)
+            gh release create "$VERSION" "${assets[@]}" \
+              --title "Devotion $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${prerelease[@]}"
+          fi

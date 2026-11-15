@@ -1,0 +1,75 @@
+# Runs on every push: the server's tests, an Android build, and a full build
+# of the Proxmox template (nothing is published).
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: make test
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests and debug build
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devotion-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  template:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUITE: trixie
+      VERSION: v0.0.0-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install image build tools
+        run: deploy/lxc-template/ci-install-build-tools.sh "$SUITE"
+      - name: Build the release tarball
+        run: make release VERSION="$VERSION"
+      - name: Build the LXC template
+        run: |
+          sudo deploy/lxc-template/build-lxc-template.sh --suite "$SUITE" --version "$VERSION" \
+            --release "dist/devotion-$VERSION-linux-amd64.tar.gz"
+          sudo chown -R "$(id -u):$(id -g)" dist
+      - name: Check the template
+        run: |
+          pip install --quiet zstandard
+          python3 deploy/lxc-template/check-template.py dist/debian-*-devotion_"$VERSION"_amd64.tar.zst \
+            --require usr/local/bin/devotion --require opt/piper/piper
+          ls -lh dist

@@ -1,0 +1,10 @@
+# /etc/systemd/system/devotion-update.service
+[Unit]
+Description=Install a Devotion server release from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/devotion-update
+TimeoutStartSec=15min

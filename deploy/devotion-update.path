@@ -1,0 +1,11 @@
+# /etc/systemd/system/devotion-update.path
+# The web page's "Install" button writes this file; that starts the updater.
+[Unit]
+Description=Watch for an update requested from the Devotion admin page
+
+[Path]
+PathExists=/var/lib/devotion/update-request
+Unit=devotion-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,33 @@
+# /etc/systemd/system/devotion.service
+[Unit]
+Description=Devotion server (email to entries and audio)
+Wants=network-online.target
+After=network-online.target
+# A bind-mounted data directory must be there first.
+RequiresMountsFor=/var/lib/devotion
+
+[Service]
+Type=simple
+User=devotion
+Group=devotion
+ExecStart=/usr/local/bin/devotion
+Restart=on-failure
+RestartSec=5
+UMask=0027
+
+# The voice engine loads a neural model; this leaves it room in a 1 GB container.
+MemoryMax=768M
+TasksMax=128
+
+# Sandboxing. In an unprivileged Proxmox container these need the "nesting"
+# feature; without it the service fails with status 226/NAMESPACE.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/devotion
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+{
+  "name": "devotion-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Turns emails from a Gmail inbox into devotion entries with narrated audio",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0"
+  }
+}
