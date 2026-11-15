@@ -1,10 +1,13 @@
 package com.mastifdogo.devotion
 
 import android.app.Application
+import android.app.WallpaperManager
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
@@ -30,18 +33,23 @@ import com.mastifdogo.devotion.data.Profile
 import com.mastifdogo.devotion.data.SettingsStore
 import com.mastifdogo.devotion.data.StoredAnnotation
 import com.mastifdogo.devotion.data.Voice
+import com.mastifdogo.devotion.data.WallpaperStore
 import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
 import com.mastifdogo.devotion.logic.ServerAddress
+import com.mastifdogo.devotion.logic.ServerWallpaper
 import com.mastifdogo.devotion.logic.TextLogic
+import com.mastifdogo.devotion.logic.WallpaperLibrary
+import com.mastifdogo.devotion.logic.WallpaperLogic
 import com.mastifdogo.devotion.ui.ThemeMode
 import com.mastifdogo.devotion.update.ReleaseAsset
 import com.mastifdogo.devotion.update.UpdateCheck
 import com.mastifdogo.devotion.update.UpdateLogic
 import com.mastifdogo.devotion.update.Updater
+import coil.ImageLoader
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -60,6 +68,8 @@ sealed class Screen {
     data object EntryList : Screen()
     data class Detail(val id: Long) : Screen()
     data object Settings : Screen()
+    /** Browsing the server's wallpapers (opened from Settings). */
+    data object Wallpapers : Screen()
 }
 
 /** Where to return when the Bible tab was opened from an entry (a reference or "Open in Bible"). */
@@ -85,6 +95,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val bibleStore = BibleStore(application.filesDir)
     private val api = ApiClient()
     private val updater = Updater(application.cacheDir)
+    private val wallpaperStore = WallpaperStore(application.filesDir)
 
     // ---- navigation -------------------------------------------------------------------------
 
@@ -98,6 +109,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun open(target: Screen) {
         screen = target
         if (target is Screen.Settings) refreshVoices()
+        if (target is Screen.Wallpapers) {
+            wallPreview = null
+            wallMessage = null
+            refreshWallpapers()
+        }
     }
 
     fun selectTab(tab: EntryTab) {
@@ -130,6 +146,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (isServerConfigured) sync()
             }
             is Screen.Detail -> screen = Screen.EntryList
+            is Screen.Wallpapers -> if (wallPreview != null) closeWallpaperPreview() else screen = Screen.Settings
             is Screen.EntryList -> if (selectedTab == EntryTab.BIBLE) bibleBack()
         }
     }
@@ -1237,6 +1254,191 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---- wallpapers ---------------------------------------------------------------------------
+
+    /**
+     * Loads the browsing thumbnails and previews from the server. Memory cache only: nothing
+     * the user merely browses is written to disk.
+     */
+    private var wallLoaderCreated = false
+
+    val imageLoader: ImageLoader by lazy {
+        wallLoaderCreated = true
+        ImageLoader.Builder(getApplication<Application>())
+            .diskCache { null }
+            .crossfade(true)
+            .build()
+    }
+
+    /** The server's library; null until loaded (or when it could not be loaded). */
+    var wallLibrary: WallpaperLibrary? by mutableStateOf(null)
+        private set
+    var wallLoading: Boolean by mutableStateOf(false)
+        private set
+    /** True when the server could not be reached: the screen shows only "Connect to your server". */
+    var wallUnreachable: Boolean by mutableStateOf(false)
+        private set
+    /** True when the server answered 404 (too old to have wallpapers). */
+    var wallUnsupported: Boolean by mutableStateOf(false)
+        private set
+    /** Selected topic chip; null = All. */
+    var wallTopic: String? by mutableStateOf(settings.wallTopic.takeIf { it.isNotEmpty() })
+        private set
+    /** The wallpaper shown full screen, if any. */
+    var wallPreview: ServerWallpaper? by mutableStateOf(null)
+        private set
+    /** Something running on the preview ("Saving…", "Setting the phone wallpaper…"). */
+    var wallBusy: String? by mutableStateOf(null)
+        private set
+    /** Result of the last preview action, shown under its buttons. */
+    var wallMessage: String? by mutableStateOf(null)
+        private set
+
+    /** The app background (decoded, at most ~1440 px on the long side), or null. */
+    var appWallpaper: ImageBitmap? by mutableStateOf(null)
+        private set
+    var appWallpaperId: String by mutableStateOf(settings.wallpaperId)
+        private set
+    /** How visible the app wallpaper is behind the content, 0..1. */
+    var wallpaperStrength: Float by mutableStateOf(settings.wallpaperStrength.coerceIn(0f, 1f))
+        private set
+
+    private var wallJob: Job? = null
+
+    fun refreshWallpapers() {
+        if (!isServerConfigured) {
+            wallLibrary = null
+            wallUnreachable = true
+            return
+        }
+        if (wallJob?.isActive == true) return
+        val url = serverUrl
+        wallLoading = true
+        wallJob = viewModelScope.launch {
+            try {
+                val library = withContext(Dispatchers.IO) { api.wallpapers(url) }
+                wallUnreachable = false
+                wallUnsupported = library == null
+                wallLibrary = library
+                if (library != null) wallTopic = WallpaperLogic.validTopic(library, wallTopic)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // No cached library: without the server there is nothing to browse.
+                wallLibrary = null
+                wallUnreachable = true
+            } finally {
+                wallLoading = false
+            }
+        }
+    }
+
+    fun selectWallTopic(topicId: String?) {
+        wallTopic = topicId
+        settings.wallTopic = topicId ?: ""
+    }
+
+    fun wallThumbUrl(id: String): String = ApiClient.wallpaperUrl(serverUrl, id, thumb = true)
+
+    fun wallImageUrl(id: String): String = ApiClient.wallpaperUrl(serverUrl, id, thumb = false)
+
+    fun openWallpaperPreview(wallpaper: ServerWallpaper) {
+        wallMessage = null
+        wallPreview = wallpaper
+    }
+
+    fun closeWallpaperPreview() {
+        wallPreview = null
+        wallMessage = null
+    }
+
+    /** Downloads [wallpaper] as the app background (the only wallpaper stored on the phone). */
+    fun useWallpaperInApp(wallpaper: ServerWallpaper) {
+        if (wallBusy != null) return
+        val url = serverUrl
+        wallBusy = "Saving the wallpaper…"
+        wallMessage = null
+        viewModelScope.launch {
+            try {
+                val bitmap = withContext(Dispatchers.IO) {
+                    val file = wallpaperStore.replace(api, url, wallpaper)
+                    wallpaperStore.decode(file)
+                } ?: throw IllegalStateException("The wallpaper could not be decoded.")
+                appWallpaper = bitmap.asImageBitmap()
+                appWallpaperId = wallpaper.id
+                settings.wallpaperId = wallpaper.id
+                settings.wallpaperPageUrl = wallpaper.sourceUrl ?: ""
+                wallMessage = "Now the app background."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                wallMessage = "Could not save the wallpaper: ${describe(e)}"
+            } finally {
+                wallBusy = null
+            }
+        }
+    }
+
+    /**
+     * Streams [wallpaper] from the server straight into the system wallpaper.
+     * [which] is WallpaperManager.FLAG_SYSTEM, FLAG_LOCK or both.
+     */
+    fun setPhoneWallpaper(wallpaper: ServerWallpaper, which: Int) {
+        if (wallBusy != null) return
+        val url = serverUrl
+        val app = getApplication<Application>()
+        wallBusy = "Setting the phone wallpaper…"
+        wallMessage = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val manager = WallpaperManager.getInstance(app)
+                    api.streamWallpaper(url, wallpaper.id) { stream ->
+                        manager.setStream(stream, null, true, which)
+                    }
+                }
+                wallMessage = when (which) {
+                    WallpaperManager.FLAG_SYSTEM -> "Set as the home screen wallpaper."
+                    WallpaperManager.FLAG_LOCK -> "Set as the lock screen wallpaper."
+                    else -> "Set as the home and lock screen wallpaper."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                wallMessage = "Could not set the phone wallpaper: ${describe(e)}"
+            } finally {
+                wallBusy = null
+            }
+        }
+    }
+
+    fun removeAppWallpaper() {
+        appWallpaper = null
+        appWallpaperId = ""
+        settings.wallpaperId = ""
+        settings.wallpaperPageUrl = ""
+        viewModelScope.launch { withContext(Dispatchers.IO) { wallpaperStore.remove() } }
+    }
+
+    fun updateWallpaperStrength(value: Float) {
+        val v = value.coerceIn(0f, 1f)
+        wallpaperStrength = v
+        settings.wallpaperStrength = v
+    }
+
+    private fun loadAppWallpaper() {
+        viewModelScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                try {
+                    wallpaperStore.currentFile()?.let { wallpaperStore.decode(it) }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            appWallpaper = bitmap?.asImageBitmap()
+        }
+    }
+
     // ---- manual update check ----------------------------------------------------------------
 
     var update: UpdateUi by mutableStateOf(UpdateUi.Idle)
@@ -1313,6 +1515,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cachedAudio = store.cachedAudioFiles()
         downloadedBibles = bibleStore.downloaded()
         loadProfileContext()
+        loadAppWallpaper()
         if (selectedTab == EntryTab.BIBLE) enterBibleTab()
         if (isServerConfigured) {
             sync()
@@ -1322,6 +1525,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        if (wallLoaderCreated) imageLoader.shutdown()
         positionJob?.cancel()
         player?.release()
         player = null

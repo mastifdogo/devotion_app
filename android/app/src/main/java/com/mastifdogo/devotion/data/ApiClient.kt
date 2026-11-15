@@ -1,8 +1,11 @@
 package com.mastifdogo.devotion.data
 
 import com.mastifdogo.devotion.logic.ServerAddress
+import com.mastifdogo.devotion.logic.WallpaperLibrary
+import com.mastifdogo.devotion.logic.WallpaperLogic
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import okhttp3.HttpUrl
@@ -140,6 +143,57 @@ class ApiClient {
         return downloadTo(url, dest, "Downloading the Bible", "The server no longer has this Bible version.", onProgress)
     }
 
+    // ---- wallpapers -------------------------------------------------------------------------
+
+    /** GET /api/wallpapers; null when the server is too old to have wallpapers (404). */
+    fun wallpapers(baseUrl: String): WallpaperLibrary? {
+        val url = apiUrl(baseUrl).addPathSegments("api/wallpapers").build()
+        return try {
+            getJson(url, "Loading wallpapers") { WallpaperLogic.parseLibrary(it) }
+        } catch (e: ApiException) {
+            if (e.httpCode == 404) null else throw e
+        }
+    }
+
+    /** What a wallpaper download produced. */
+    class Download(val sha256: String, val contentType: String?)
+
+    /** GET /api/wallpapers/{id} into [dest]. */
+    fun downloadWallpaper(baseUrl: String, id: String, dest: File): Download {
+        val url = wallpaperUrl(baseUrl, id, thumb = false)
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 404) throw ApiException("The server no longer has this wallpaper.", 404)
+            if (!response.isSuccessful) throw httpError(response.code, "", "Downloading the wallpaper")
+            val body = response.body ?: throw ApiException("Downloading the wallpaper failed: empty response.")
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(64 * 1024)
+            body.byteStream().use { input ->
+                dest.outputStream().use { output ->
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        output.write(buffer, 0, n)
+                        digest.update(buffer, 0, n)
+                    }
+                }
+            }
+            val sha = digest.digest().joinToString("") { b -> "%02x".format(b.toInt() and 0xff) }
+            return Download(sha, response.header("Content-Type"))
+        }
+    }
+
+    /** Opens GET /api/wallpapers/{id} and hands the body stream to [consume] (no copy on disk). */
+    fun streamWallpaper(baseUrl: String, id: String, consume: (InputStream) -> Unit) {
+        val request = Request.Builder().url(wallpaperUrl(baseUrl, id, thumb = false)).build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 404) throw ApiException("The server no longer has this wallpaper.", 404)
+            if (!response.isSuccessful) throw httpError(response.code, "", "Loading the wallpaper")
+            val body = response.body ?: throw ApiException("Loading the wallpaper failed: empty response.")
+            body.byteStream().use { consume(it) }
+        }
+    }
+
     // ---- plumbing ---------------------------------------------------------------------------
 
     private inline fun <T> getJson(url: HttpUrl, what: String, parse: (String) -> T): T {
@@ -206,6 +260,13 @@ class ApiClient {
     companion object {
         /** See [ServerAddress.normalize]. */
         fun normalizeBaseUrl(raw: String): String = ServerAddress.normalize(raw)
+
+        /** URL of a wallpaper's full image or its thumbnail, for the image loader. */
+        fun wallpaperUrl(baseUrl: String, id: String, thumb: Boolean): String {
+            val builder = apiUrl(baseUrl).addPathSegments("api/wallpapers").addPathSegment(id)
+            if (thumb) builder.addPathSegment("thumb")
+            return builder.build().toString()
+        }
 
         private fun apiUrl(baseUrl: String): HttpUrl.Builder {
             val normalized = normalizeBaseUrl(baseUrl)

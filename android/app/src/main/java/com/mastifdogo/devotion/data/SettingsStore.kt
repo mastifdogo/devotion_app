@@ -81,6 +81,27 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_ENTRY_TAB, "") ?: ""
         set(value) = prefs.edit().putString(KEY_ENTRY_TAB, value).apply()
 
+    // ---- wallpapers -----------------------------------------------------------------------------
+
+    /** Server id and wallhaven.cc source page of the app wallpaper ("" when none). */
+    var wallpaperId: String
+        get() = prefs.getString(KEY_WALL_ID, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WALL_ID, value).apply()
+
+    var wallpaperPageUrl: String
+        get() = prefs.getString(KEY_WALL_URL, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WALL_URL, value).apply()
+
+    /** How visible the app wallpaper is, 0..1. */
+    var wallpaperStrength: Float
+        get() = prefs.getFloat(KEY_WALL_STRENGTH, 0.35f)
+        set(value) = prefs.edit().putFloat(KEY_WALL_STRENGTH, value).apply()
+
+    /** Topic chip selected on the Wallpapers screen ("" = All). */
+    var wallTopic: String
+        get() = prefs.getString(KEY_WALL_TOPIC, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WALL_TOPIC, value).apply()
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -107,6 +128,10 @@ class SettingsStore(context: Context) {
         const val KEY_VOICES_JSON = "voices_json_"
         const val KEY_LAST_COLOR = "last_highlight_color"
         const val KEY_ENTRY_TAB = "entry_tab"
+        const val KEY_WALL_ID = "wallpaper_id"
+        const val KEY_WALL_URL = "wallpaper_url"
+        const val KEY_WALL_STRENGTH = "wallpaper_strength"
+        const val KEY_WALL_TOPIC = "wall_topic"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"
