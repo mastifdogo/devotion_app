@@ -9,122 +9,18 @@ import java.time.format.DateTimeFormatter
 /** A character range in an entry body; [end] is exclusive. */
 data class Passage(val start: Int, val end: Int)
 
-/** A paragraph of the body and the sentences inside it (all offsets are into the whole body). */
-data class Paragraph(val start: Int, val end: Int, val sentences: List<Passage>)
-
 /**
- * A piece of a paragraph that is drawn in one style. [sentence] is the index of the sentence it
- * belongs to within the paragraph (-1 for whitespace between sentences) and [link] the index of
- * the link it belongs to in the list given to [TextLogic.styledSpans] (-1 when it is not a link).
- */
-data class StyledSpan(val start: Int, val end: Int, val sentence: Int, val link: Int)
-
-/**
- * Pure text and annotation logic (no Android): splitting a body into paragraphs and sentences,
- * finding annotations by overlap, and merging local and server annotations.
+ * Pure annotation logic (no Android): ranges, timestamps, and merging local and server
+ * annotations. Drawing and hit-testing of highlights lives in [HighlightLogic].
  */
 object TextLogic {
     const val COLOR_NONE = "none"
     val HIGHLIGHT_COLORS: List<String> = listOf("yellow", "green", "blue", "pink")
 
-    private val paragraphBreak = Regex("\\r?\\n[ \\t]*(\\r?\\n[ \\t]*)+")
-    private const val TERMINATORS = ".!?…"
-    private const val CLOSERS = "\"'”’»)]"
-    private val abbreviations = setOf(
-        "mr", "mrs", "ms", "dr", "st", "vs", "v", "vv", "cf", "etc", "rev", "fr", "sr", "jr",
-        "ch", "no", "prof", "eg", "ie",
-    )
     private val isoMillis: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
-    // ---- paragraphs and sentences -----------------------------------------------------------
-
-    /** Paragraphs are separated by blank lines; surrounding whitespace is not part of a paragraph. */
-    fun paragraphs(body: String): List<Paragraph> {
-        val result = ArrayList<Paragraph>()
-        var from = 0
-        for (match in paragraphBreak.findAll(body)) {
-            addParagraph(body, from, match.range.first, result)
-            from = match.range.last + 1
-        }
-        addParagraph(body, from, body.length, result)
-        return result
-    }
-
-    private fun addParagraph(body: String, rawStart: Int, rawEnd: Int, out: MutableList<Paragraph>) {
-        var start = rawStart
-        var end = rawEnd
-        while (start < end && body[start].isWhitespace()) start++
-        while (end > start && body[end - 1].isWhitespace()) end--
-        if (start >= end) return
-        out.add(Paragraph(start, end, sentences(body, start, end)))
-    }
-
-    /**
-     * Sentences of body[[from], [to]). A sentence ends after ". ! ? …" (plus closing quotes or
-     * brackets) when whitespace follows and the next word does not start in lower case, or at a
-     * line break. Common abbreviations ("Mr.", "St.", "v.") and single-letter initials do not end
-     * a sentence. Every non-whitespace character belongs to exactly one sentence.
-     */
-    fun sentences(body: String, from: Int = 0, to: Int = body.length): List<Passage> {
-        val result = ArrayList<Passage>()
-        var start = from
-        var i = from
-        while (i < to) {
-            val c = body[i]
-            if (c == '\n') {
-                addSentence(body, start, i, result)
-                start = i + 1
-                i++
-                continue
-            }
-            if (TERMINATORS.indexOf(c) >= 0) {
-                var j = i + 1
-                while (j < to && (TERMINATORS.indexOf(body[j]) >= 0 || CLOSERS.indexOf(body[j]) >= 0)) j++
-                if (j >= to) {
-                    i = j
-                    continue
-                }
-                if (body[j].isWhitespace() && isBoundary(body, start, i, j, to)) {
-                    addSentence(body, start, j, result)
-                    start = j
-                }
-                i = j
-                continue
-            }
-            i++
-        }
-        addSentence(body, start, to, result)
-        return result
-    }
-
-    private fun isBoundary(body: String, sentenceStart: Int, terminatorAt: Int, afterEnd: Int, to: Int): Boolean {
-        var next = afterEnd
-        while (next < to && body[next].isWhitespace()) {
-            if (body[next] == '\n') return true
-            next++
-        }
-        if (next >= to) return true
-        if (body[next].isLowerCase()) return false
-        if (body[terminatorAt] == '.') {
-            var wordStart = terminatorAt
-            while (wordStart > sentenceStart && body[wordStart - 1].isLetter()) wordStart--
-            val word = body.substring(wordStart, terminatorAt)
-            if (word.length == 1 && word[0].isUpperCase()) return false
-            if (word.lowercase() in abbreviations) return false
-        }
-        return true
-    }
-
-    private fun addSentence(body: String, rawStart: Int, rawEnd: Int, out: MutableList<Passage>) {
-        var start = rawStart
-        var end = rawEnd
-        while (start < end && body[start].isWhitespace()) start++
-        while (end > start && body[end - 1].isWhitespace()) end--
-        if (start < end) out.add(Passage(start, end))
-    }
-
-    // ---- styled spans ------------------------------------------------------------------------
+    // ---- links ---------------------------------------------------------------------------------
 
     /**
      * Links that can be drawn on a body of [bodyLength] characters: ranges outside the body or
@@ -143,65 +39,12 @@ object TextLogic {
         return result.toList()
     }
 
-    /**
-     * Cuts [paragraph] into consecutive spans at every sentence and link boundary, so that each
-     * span lies in at most one sentence and at most one link. The spans cover the paragraph
-     * exactly, in order. [links] may contain nulls (see [usableLinks]); they are ignored.
-     */
-    fun styledSpans(paragraph: Paragraph, links: List<Passage?>): List<StyledSpan> {
-        val cuts = sortedSetOf(paragraph.start, paragraph.end)
-        for (s in paragraph.sentences) {
-            cuts.add(s.start.coerceIn(paragraph.start, paragraph.end))
-            cuts.add(s.end.coerceIn(paragraph.start, paragraph.end))
-        }
-        for (link in links) {
-            if (link == null || !overlaps(link.start, link.end, paragraph.start, paragraph.end)) continue
-            cuts.add(link.start.coerceIn(paragraph.start, paragraph.end))
-            cuts.add(link.end.coerceIn(paragraph.start, paragraph.end))
-        }
-        val points = cuts.toList()
-        val result = ArrayList<StyledSpan>()
-        for (i in 0 until points.size - 1) {
-            val from = points[i]
-            val to = points[i + 1]
-            val sentence = paragraph.sentences.indexOfFirst { from >= it.start && to <= it.end }
-            val link = links.indexOfFirst { it != null && from >= it.start && to <= it.end }
-            result.add(StyledSpan(from, to, sentence, link))
-        }
-        return result
-    }
-
     // ---- ranges -----------------------------------------------------------------------------
 
     fun overlaps(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Boolean = aStart < bEnd && bStart < aEnd
 
-    private fun overlapLength(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Int =
-        (minOf(aEnd, bEnd) - maxOf(aStart, bStart)).coerceAtLeast(0)
-
     /** A note on the whole entry rather than on a passage. */
     fun isEntryNote(a: Annotation): Boolean = a.start == 0 && a.end == 0
-
-    /**
-     * The live passage annotation of [entryId] that overlaps [start, end) the most
-     * (the most recently changed one on a tie), or null.
-     */
-    fun findOverlapping(annotations: List<Annotation>, entryId: Long, start: Int, end: Int): Annotation? {
-        var best: Annotation? = null
-        var bestLength = 0
-        for (a in annotations) {
-            if (a.deleted || a.entryId != entryId || isEntryNote(a)) continue
-            if (!overlaps(a.start, a.end, start, end)) continue
-            val length = overlapLength(a.start, a.end, start, end)
-            val current = best
-            if (current == null || length > bestLength ||
-                (length == bestLength && compareTimestamps(a.updatedAt, current.updatedAt) > 0)
-            ) {
-                best = a
-                bestLength = length
-            }
-        }
-        return best
-    }
 
     /** The live whole-entry note of [entryId] (the most recently changed one), or null. */
     fun entryNote(annotations: List<Annotation>, entryId: Long): Annotation? =

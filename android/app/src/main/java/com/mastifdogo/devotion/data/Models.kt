@@ -33,11 +33,39 @@ data class Entry(
     val archived: Boolean = false,
     /** Verse references found in [body] by the server (absent on old servers). */
     val references: List<EntryReference> = emptyList(),
+    /**
+     * One item per voice the entry has audio in. null when the server does not send the field
+     * (older servers): then [hasAudio]/[audioBytes]/[audioSha256] describe the only variant.
+     * See [com.mastifdogo.devotion.logic.AudioLogic.variants].
+     */
+    val audio: List<AudioVariant>? = null,
 ) {
     /** "yyyy-MM-dd"-like key used for ordering: entry_date, falling back to created_at. */
     val sortKey: String
         get() = entryDate?.takeIf { it.isNotBlank() } ?: createdAt.orEmpty()
 }
+
+/** The audio of an entry in one voice. [voice] "" stands for the server default (older servers). */
+@Serializable
+data class AudioVariant(
+    val voice: String = "",
+    val bytes: Long? = null,
+    val sha256: String? = null,
+)
+
+/** A text-to-speech voice the server has. */
+@Serializable
+data class Voice(
+    val id: String,
+    val name: String = "",
+    val description: String? = null,
+)
+
+@Serializable
+data class VoicesResponse(
+    val voices: List<Voice> = emptyList(),
+    @SerialName("default") val defaultVoice: String? = null,
+)
 
 /**
  * A verse reference as written in an entry body, e.g. "John 3:16-17" at body[[start], [end]).

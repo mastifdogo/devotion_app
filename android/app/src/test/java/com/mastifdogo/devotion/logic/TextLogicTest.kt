@@ -10,9 +10,6 @@ import org.junit.Test
 
 class TextLogicTest {
 
-    private fun texts(body: String, passages: List<Passage>): List<String> =
-        passages.map { body.substring(it.start, it.end) }
-
     private fun ann(
         id: String,
         start: Int,
@@ -24,99 +21,7 @@ class TextLogicTest {
         deleted: Boolean = false,
     ) = Annotation(id, entryId, start, end, color, comment, updatedAt, deleted)
 
-    // ---- splitting --------------------------------------------------------------------------
-
-    @Test
-    fun sentences_splitOnTerminators() {
-        val body = "God is love. Do you believe this? Yes! Amen"
-        assertEquals(
-            listOf("God is love.", "Do you believe this?", "Yes!", "Amen"),
-            texts(body, TextLogic.sentences(body)),
-        )
-    }
-
-    @Test
-    fun sentences_keepClosingQuotesAndIgnoreAbbreviations() {
-        val body = "He said, \"Follow me.\" Then St. Paul wrote to Mr. Smith in A. D. 60. It was e.g. a letter."
-        assertEquals(
-            listOf(
-                "He said, \"Follow me.\"",
-                "Then St. Paul wrote to Mr. Smith in A. D. 60.",
-                "It was e.g. a letter.",
-            ),
-            texts(body, TextLogic.sentences(body)),
-        )
-    }
-
-    @Test
-    fun sentences_doNotSplitInsideNumbersAndSplitOnLineBreaks() {
-        val body = "See John 3.16 today...\nSecond line\nThird line."
-        assertEquals(
-            listOf("See John 3.16 today...", "Second line", "Third line."),
-            texts(body, TextLogic.sentences(body)),
-        )
-    }
-
-    @Test
-    fun paragraphs_splitOnBlankLinesWithBodyOffsets() {
-        val body = "  First one. Second one.\n\nNext paragraph here.\r\n \r\n\r\nLast.\n"
-        val paragraphs = TextLogic.paragraphs(body)
-        assertEquals(3, paragraphs.size)
-        assertEquals("First one. Second one.", body.substring(paragraphs[0].start, paragraphs[0].end))
-        assertEquals(listOf("First one.", "Second one."), texts(body, paragraphs[0].sentences))
-        assertEquals(listOf("Next paragraph here."), texts(body, paragraphs[1].sentences))
-        assertEquals(listOf("Last."), texts(body, paragraphs[2].sentences))
-        // Every non-whitespace character is inside exactly one sentence.
-        val covered = BooleanArray(body.length)
-        for (p in paragraphs) for (s in p.sentences) for (i in s.start until s.end) {
-            assertFalse(covered[i])
-            covered[i] = true
-        }
-        for (i in body.indices) if (!body[i].isWhitespace()) assertTrue(covered[i])
-    }
-
-    @Test
-    fun paragraphs_emptyBody() {
-        assertTrue(TextLogic.paragraphs("").isEmpty())
-        assertTrue(TextLogic.paragraphs(" \n\n ").isEmpty())
-    }
-
-    // ---- styled spans ------------------------------------------------------------------------
-
-    @Test
-    fun styledSpans_cutAtSentenceAndLinkBoundaries() {
-        val body = "Read John 3:16 today. Then rest."
-        val paragraph = TextLogic.paragraphs(body).single()
-        val linkStart = body.indexOf("John")
-        val links = TextLogic.usableLinks(listOf(Passage(linkStart, linkStart + "John 3:16".length)), body.length)
-        val spans = TextLogic.styledSpans(paragraph, links)
-        assertEquals(
-            listOf("Read ", "John 3:16", " today.", " ", "Then rest."),
-            spans.map { body.substring(it.start, it.end) },
-        )
-        assertEquals(listOf(0, 0, 0, -1, 1), spans.map { it.sentence })
-        assertEquals(listOf(-1, 0, -1, -1, -1), spans.map { it.link })
-        // The spans cover the paragraph exactly, in order.
-        assertEquals(paragraph.start, spans.first().start)
-        assertEquals(paragraph.end, spans.last().end)
-        for (i in 1 until spans.size) assertEquals(spans[i - 1].end, spans[i].start)
-    }
-
-    @Test
-    fun styledSpans_linkAcrossSentencesAndOutsideParagraph() {
-        val body = "First one. Second one.\n\nOther paragraph John 1."
-        val paragraphs = TextLogic.paragraphs(body)
-        // A link that starts in sentence 0 and ends in sentence 1, and one in the other paragraph.
-        val links = TextLogic.usableLinks(listOf(Passage(6, 16), Passage(body.indexOf("John 1"), body.length - 1)), body.length)
-        val first = TextLogic.styledSpans(paragraphs[0], links)
-        assertEquals(paragraphs[0].end, first.last().end)
-        assertTrue(first.filter { it.link == 0 }.map { it.sentence }.containsAll(listOf(0, 1)))
-        assertTrue(first.none { it.link == 1 })
-        val second = TextLogic.styledSpans(paragraphs[1], links)
-        assertEquals(listOf("John 1"), second.filter { it.link == 1 }.map { body.substring(it.start, it.end) })
-        // Without links a paragraph is just its sentences and the gaps between them.
-        assertEquals(listOf(0, -1, 1), TextLogic.styledSpans(paragraphs[0], emptyList()).map { it.sentence })
-    }
+    // ---- links ------------------------------------------------------------------------------
 
     @Test
     fun usableLinks_dropOutOfRangeEmptyAndOverlapping() {
@@ -142,30 +47,6 @@ class TextLogicTest {
         assertTrue(TextLogic.overlaps(5, 6, 0, 10))
         assertFalse(TextLogic.overlaps(0, 10, 10, 20))
         assertFalse(TextLogic.overlaps(10, 20, 0, 10))
-    }
-
-    @Test
-    fun findOverlapping_picksLargestOverlapAndSkipsDeletedNotesAndOtherEntries() {
-        val list = listOf(
-            ann("small", 0, 12),
-            ann("big", 10, 40),
-            ann("deleted", 10, 40, deleted = true),
-            ann("note", 0, 0),
-            ann("other-entry", 10, 40, entryId = 2),
-        )
-        assertEquals("big", TextLogic.findOverlapping(list, 1, 10, 30)?.id)
-        assertEquals("small", TextLogic.findOverlapping(list, 1, 0, 10)?.id)
-        assertNull(TextLogic.findOverlapping(list, 1, 40, 50))
-        assertNull(TextLogic.findOverlapping(list, 3, 10, 30))
-    }
-
-    @Test
-    fun findOverlapping_tieGoesToTheNewest() {
-        val list = listOf(
-            ann("old", 0, 10, updatedAt = "2026-11-15T12:00:00.000Z"),
-            ann("new", 0, 10, updatedAt = "2026-11-15T12:00:01.000Z"),
-        )
-        assertEquals("new", TextLogic.findOverlapping(list, 1, 0, 10)?.id)
     }
 
     @Test
