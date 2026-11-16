@@ -41,6 +41,36 @@ object WindowLogic {
     fun migrateShade(stored: Float, migrated: Boolean): Float =
         if (!migrated && stored == 1f) DEFAULT_SHADE else clampShade(stored)
 
+    /** Without a wallpaper the cards are the background darkened by shade x 10%, opaque. */
+    const val MAX_SHADE_NO_WALLPAPER = 0.10f
+
+    /**
+     * Mixes ARGB colour [base] toward black by [fraction] (0..1) per sRGB channel, like CSS
+     * `color-mix(in srgb, base, #000 fraction)`; the result is opaque.
+     */
+    fun darken(base: Int, fraction: Float): Int {
+        val f = if (fraction.isNaN()) 0f else fraction.coerceIn(0f, 1f)
+        fun channel(shift: Int): Int = (((base shr shift) and 0xFF) * (1f - f)).roundToInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+    }
+
+    /**
+     * The fill of a list item card, as on the website: with a wallpaper, the window colour
+     * darkened by shade x 22% at the window opacity (drawn over the window, so cards are darker
+     * and a little more opaque than it); without one, the background darkened by shade x 10%,
+     * opaque. [baseArgb] is the window colour (with a wallpaper) or the background (without).
+     */
+    fun itemFillArgb(baseArgb: Int, hasWallpaper: Boolean, windowOpacity: Float, shade: Float): Int {
+        val s = clampShade(shade)
+        return if (hasWallpaper) {
+            val rgb = darken(baseArgb, s * MAX_SHADE_ALPHA) and 0x00FFFFFF
+            val alpha = (clampOpacity(windowOpacity) * 255f).roundToInt().coerceIn(0, 255)
+            (alpha shl 24) or rgb
+        } else {
+            darken(baseArgb, s * MAX_SHADE_NO_WALLPAPER)
+        }
+    }
+
     /** "40%" for a shade of 0.4 (after clamping). */
     fun shadeLabel(value: Float): String =
         String.format(Locale.ROOT, "%d%%", (clampShade(value) * 100f).roundToInt())

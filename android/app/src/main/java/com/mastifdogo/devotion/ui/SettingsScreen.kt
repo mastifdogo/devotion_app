@@ -464,20 +464,14 @@ private fun WallpaperSection(vm: MainViewModel) {
         text = "List item shade: ${WindowLogic.shadeLabel(vm.listItemShade)}",
         style = MaterialTheme.typography.bodyMedium,
     )
+    // Works with or without a wallpaper (without one the cards are the background, darkened).
     Slider(
         value = vm.listItemShade,
         onValueChange = { vm.updateListItemShade(it) },
         valueRange = 0f..1f,
-        enabled = current != null,
         modifier = Modifier.fillMaxWidth(),
     )
-    if (current == null) {
-        Text(
-            text = "Choose a wallpaper first",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    } else {
+    if (current != null) {
         OutlinedButton(onClick = { vm.removeAppWallpaper() }) { Text("Remove app wallpaper") }
     }
 }

@@ -59,3 +59,26 @@ test('archive to a real SMB share', { skip: share ? false : 'SMB_TEST_SHARE is n
 	assert.equal(existsSync(path.join(audioDir, '1-abc.mp3')), false);
 	assert.equal(await archiver.runOnce(), 0);
 });
+
+test('backup to a real SMB share, keep the newest, and stage a restore', { skip: share ? false : 'SMB_TEST_SHARE is not set' }, async (t) => {
+	const { Backups } = await import('../src/backup.js');
+	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-smb-backup-'));
+	const db = openDb(dir);
+	t.after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+	const settings = new Settings(db, {});
+	const folder = `Devotion Test/backups ${Date.now()}`;
+	settings.applyForm({ backup_smb_share: share, backup_smb_folder: folder, backup_smb_username: user, backup_smb_password: password, backup_keep: '1' });
+	const backups = new Backups({ db, settings, dataDir: dir, exit: () => {}, log: quiet });
+	assert.deepEqual(await backups.test(), { ok: true, folder });
+	assert.deepEqual(await backups.list(), []);
+	await backups.runOnce();
+	await new Promise((r) => setTimeout(r, 1100));
+	const second = await backups.runOnce();
+	assert.equal(second.removed, 1);
+	const list = await backups.list();
+	assert.equal(list.length, 1);
+	assert.ok(list[0].bytes > 0);
+	if (shareDir) assert.equal(readFileSync(path.join(shareDir, folder, list[0].name)).length, list[0].bytes);
+	await backups.restore(list[0].name);
+	assert.ok(existsSync(path.join(dir, 'devotion.db.restore')));
+});

@@ -34,11 +34,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +56,16 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.mastifdogo.devotion.data.Annotation
+import com.mastifdogo.devotion.logic.BibleRef
+import com.mastifdogo.devotion.logic.BibleTextLogic
+import com.mastifdogo.devotion.logic.Passage
+import com.mastifdogo.devotion.logic.TextLogic
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.mastifdogo.devotion.BibleView
 import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.data.Bible
@@ -229,30 +245,19 @@ private fun BibleVersions(vm: MainViewModel) {
     }
 }
 
-/**
- * List item card over a wallpaper: the window's colour darkened by the list item shade, with an
- * outline (at 0% only the outline). Nothing without a wallpaper.
- */
+/** The shared list item card look (see itemCardModifier in Theme.kt). */
 @Composable
 private fun itemCardModifier(vm: MainViewModel, shape: Shape): Modifier =
-    if (vm.appWallpaper != null) {
-        Modifier
-            .clip(shape)
-            .background(itemCardFill(vm.listItemShade))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-    } else {
-        Modifier
-    }
+    itemCardModifier(vm.appWallpaper != null, vm.windowOpacity, vm.listItemShade, shape)
 
 @Composable
 private fun VersionRow(vm: MainViewModel, info: BibleInfo, actions: @Composable () -> Unit) {
-    val card = vm.appWallpaper != null
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = if (card) 4.dp else 8.dp)
+            .padding(vertical = 4.dp)
             .then(itemCardModifier(vm, RoundedCornerShape(12.dp)))
-            .then(if (card) Modifier.padding(12.dp) else Modifier),
+            .padding(12.dp),
     ) {
         Text(text = info.name.ifBlank { info.id }, style = MaterialTheme.typography.bodyLarge)
         val details = listOfNotNull(
@@ -276,34 +281,24 @@ private fun VersionRow(vm: MainViewModel, info: BibleInfo, actions: @Composable 
 @Composable
 private fun BibleBooks(vm: MainViewModel, bible: Bible) {
     BibleHeader(vm, bible.name.ifBlank { "Bible" }, showVersions = true)
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        val cards = vm.appWallpaper != null
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 4.dp)) {
         itemsIndexed(bible.books) { index, book ->
             Text(
                 text = book.name,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(
-                        if (cards) {
-                            Modifier
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                                .then(itemCardModifier(vm, RoundedCornerShape(12.dp)))
-                        } else {
-                            Modifier
-                        },
-                    )
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                    .then(itemCardModifier(vm, RoundedCornerShape(12.dp)))
                     .clickable { vm.pickBibleBook(index) }
                     .padding(horizontal = 20.dp, vertical = 14.dp),
             )
-            if (!cards) HorizontalDivider()
         }
     }
 }
 
 @Composable
 private fun BibleChapters(vm: MainViewModel, bible: Bible) {
-    val hasWallpaper = vm.appWallpaper != null
     val bookIndex = vm.biblePickBook.coerceIn(0, (bible.books.size - 1).coerceAtLeast(0))
     val book = bible.books.getOrNull(bookIndex)
     BibleHeader(vm, book?.name ?: "Chapters", showVersions = true)
@@ -317,24 +312,15 @@ private fun BibleChapters(vm: MainViewModel, bible: Bible) {
                 modifier = Modifier
                     .padding(4.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    // Chapter tiles are list item cards like everything else.
+                    .then(itemCardModifier(vm, RoundedCornerShape(8.dp)))
                     .clickable { vm.showChapter(bookIndex, chapter, null) }
-                    // Over a wallpaper the cells take the window's colour (and opacity) with an
-                    // outline; otherwise the tinted cells as before.
-                    .then(
-                        if (hasWallpaper) {
-                            itemCardModifier(vm, RoundedCornerShape(8.dp))
-                        } else {
-                            Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
-                        },
-                    )
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = (chapter + 1).toString(),
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
             }
@@ -344,65 +330,21 @@ private fun BibleChapters(vm: MainViewModel, bible: Bible) {
 
 // ---- reader -------------------------------------------------------------------------------------
 
+/** A Bible passage whose highlight/comment dialog is open: positions, its display range for the quote, the annotation on it. */
+private class BibleEdit(val positions: Passage, val display: Passage, val existing: Annotation?)
+
 @Composable
 private fun BibleReader(vm: MainViewModel, bible: Bible) {
     val book = bible.books.getOrNull(vm.bibleBook)
     val verses = book?.chapters?.getOrNull(vm.bibleChapter) ?: emptyList()
     val title = if (book == null) "Bible" else "${book.name} ${vm.bibleChapter + 1}"
-    val listState = rememberLazyListState()
-    val markFrom = vm.bibleVerse
-    val markTo = vm.bibleVerseEnd ?: markFrom
-
-    // Jump to the referenced verse (or the top) whenever another chapter is shown.
-    LaunchedEffect(bible.id, vm.bibleBook, vm.bibleChapter, markFrom) {
-        val target = if (markFrom != null && verses.isNotEmpty()) (markFrom - 1).coerceIn(0, verses.size - 1) else 0
-        listState.scrollToItem(target)
-    }
 
     BibleHeader(vm, title, showVersions = true, onTitleClick = { vm.showBibleBooks() })
 
-    val numberStyle = SpanStyle(
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold,
-        fontSize = MaterialTheme.typography.labelMedium.fontSize,
-    )
-    val markColor = MaterialTheme.colorScheme.secondaryContainer
-    val markTextColor = MaterialTheme.colorScheme.onSecondaryContainer
     Column(modifier = Modifier.fillMaxSize()) {
-        SelectionContainer(modifier = Modifier.weight(1f)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 12.dp),
-            ) {
-                if (verses.isEmpty()) {
-                    item {
-                        Text(
-                            text = "This chapter has no text in this version.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 20.dp),
-                        )
-                    }
-                }
-                itemsIndexed(verses) { index, verse ->
-                    val number = index + 1
-                    val marked = markFrom != null && markTo != null && number >= markFrom && number <= markTo
-                    val builder = AnnotatedString.Builder()
-                    builder.append("$number ")
-                    builder.addStyle(numberStyle, 0, builder.length)
-                    builder.append(verse)
-                    Text(
-                        text = builder.toAnnotatedString(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (marked) markTextColor else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(if (marked) Modifier.background(markColor) else Modifier)
-                            .padding(horizontal = 20.dp, vertical = 4.dp),
-                    )
-                }
-            }
+        // A fresh scroll position (top) for every chapter.
+        key(bible.id, vm.bibleBook, vm.bibleChapter) {
+            ChapterText(vm, bible, verses, Modifier.weight(1f))
         }
         val hasWallpaper = vm.appWallpaper != null
         if (hasWallpaper) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -424,5 +366,138 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
                 TextButton(onClick = { vm.nextChapter() }, enabled = vm.hasNextChapter) { Text("Next ›") }
             }
         }
+    }
+}
+
+/**
+ * The chapter as one selectable text (so a selection can run across verses), with the same
+ * highlights, Highlight/Comment menu, 💬 markers and dialog as entries, the referenced verses
+ * marked, and a note on the whole chapter below. Annotations are per version.
+ */
+@Composable
+private fun ChapterText(vm: MainViewModel, bible: Bible, verses: List<String>, modifier: Modifier) {
+    val ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1)
+    val layout = remember(verses) { BibleTextLogic.layout(verses) }
+    val numbers = remember(layout) { BibleTextLogic.numberRanges(layout) }
+    val allAnnotations = vm.annotations
+    val annotations = remember(allAnnotations, ref) { vm.bibleAnnotations(ref) }
+    // HighlightLogic works on offsets in the shown text: convert verse positions to display offsets.
+    val shown = remember(annotations, layout) {
+        annotations.map {
+            it.copy(start = BibleTextLogic.toDisplay(layout, it.start), end = BibleTextLogic.toDisplay(layout, it.end))
+        }
+    }
+    val markFrom = vm.bibleVerse
+    val markTo = vm.bibleVerseEnd ?: markFrom
+    val marked = if (markFrom != null && markTo != null) BibleTextLogic.versesRange(layout, markFrom, markTo) else null
+    val scrollTarget = markFrom?.let { BibleTextLogic.verseStart(layout, it) }
+    val dark = isAppInDarkTheme()
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val topPadding = with(LocalDensity.current) { 12.dp.roundToPx() }
+    var editing by remember { mutableStateOf<BibleEdit?>(null) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(scroll)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        if (verses.isEmpty()) {
+            Text(
+                text = "This chapter has no text in this version.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            EntryBodyText(
+                body = layout.text,
+                annotations = shown,
+                links = emptyList(),
+                dark = dark,
+                onHighlight = { start, end ->
+                    BibleTextLogic.selectionToRange(layout, start, end)?.let { vm.highlightRange(0L, it.start, it.end, ref) }
+                },
+                onComment = { start, end ->
+                    val range = BibleTextLogic.selectionToRange(layout, start, end)
+                    if (range != null) {
+                        if (vm.profile == null) {
+                            vm.openProfilePrompt()
+                        } else {
+                            editing = BibleEdit(range, Passage(start, end), null)
+                        }
+                    }
+                },
+                onOpenAnnotation = { tapped ->
+                    val original = annotations.firstOrNull { it.id == tapped.id }
+                    if (original != null) {
+                        editing = BibleEdit(Passage(original.start, original.end), Passage(tapped.start, tapped.end), original)
+                    }
+                },
+                onOpenLink = { },
+                modifier = Modifier.fillMaxWidth(),
+                verseNumbers = numbers,
+                marked = marked,
+                markColor = MaterialTheme.colorScheme.secondaryContainer,
+                scrollToOffset = scrollTarget,
+                scrollKey = scrollTarget?.let { Triple(ref, markFrom, markTo) },
+                onScrollTarget = { y ->
+                    scope.launch {
+                        // Wait (briefly) until the column knows how far it can scroll.
+                        withTimeoutOrNull(1500L) { snapshotFlow { scroll.maxValue }.first { it > 0 } }
+                        scroll.scrollTo(y + topPadding)
+                    }
+                },
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Press and hold to select text, then choose Highlight or Comment.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            ChapterNote(vm, ref)
+        }
+    }
+
+    val edit = editing
+    if (edit != null) {
+        val start = edit.display.start.coerceIn(0, layout.text.length)
+        AnnotationDialog(
+            quote = layout.text.substring(start, edit.display.end.coerceIn(start, layout.text.length)),
+            existing = edit.existing,
+            initialColor = vm.lastHighlightColor,
+            dark = dark,
+            onDismiss = { editing = null },
+            onSave = { color, comment ->
+                vm.saveAnnotation(0L, edit.positions.start, edit.positions.end, edit.existing, color, comment, ref)
+                editing = null
+            },
+            onDelete = edit.existing?.let { existing ->
+                {
+                    vm.deleteAnnotation(existing)
+                    editing = null
+                }
+            },
+        )
+    }
+}
+
+/** The note on the whole chapter (like the entry note), for the current profile and version. */
+@Composable
+private fun ChapterNote(vm: MainViewModel, ref: BibleRef) {
+    val current = vm.profile ?: return
+    val saved = TextLogic.chapterNote(vm.annotations.map { it.annotation }, ref.bibleId, ref.book, ref.chapter)?.comment ?: ""
+    var text by remember(ref, current.id, saved) { mutableStateOf(saved) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it },
+        label = { Text("Your note on this chapter") },
+        minLines = 2,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Button(onClick = { vm.saveChapterNote(ref, text) }, enabled = text.trim() != saved.trim()) {
+        Text("Save note")
     }
 }

@@ -8,6 +8,8 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,7 +19,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -109,12 +114,34 @@ fun barContainerColor(hasWallpaper: Boolean): Color =
     if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surface
 
 /**
- * Fill of the list item cards inside the text window (entry cards, Bible chapters, books and
- * versions). The cards draw no colour of their own, so they show the window's colour at the
- * window's opacity; this black tint on top makes them darker: 0% = same as the window (only the
- * outline shows), 100% = black at 22% over it, in light and dark theme alike.
+ * The window's colour. Light theme: surface. Dark theme: surfaceContainerHigh, because surface is
+ * nearly black there and a darker shade on it would be invisible (the website's dark window is
+ * #25241f).
  */
-fun itemCardFill(shade: Float): Color = Color.Black.copy(alpha = WindowLogic.shadeAlpha(shade))
+@Composable
+fun windowColor(): Color =
+    if (isAppInDarkTheme()) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface
+
+/**
+ * Every list item card (entry cards, the summary, Bible versions, books and chapter tiles, the
+ * speed indicator), drawn exactly like the website (see WindowLogic.itemFillArgb):
+ * with a wallpaper, the window colour darkened by shade x 22% at the window opacity, over the
+ * window; without one, the background darkened by shade x 10%, opaque. Plus an outline.
+ */
+@Composable
+fun itemCardModifier(
+    hasWallpaper: Boolean,
+    windowOpacity: Float,
+    shade: Float,
+    shape: Shape = RoundedCornerShape(12.dp),
+): Modifier {
+    val base = if (hasWallpaper) windowColor() else MaterialTheme.colorScheme.background
+    val fill = Color(WindowLogic.itemFillArgb(base.toArgb(), hasWallpaper, windowOpacity, shade))
+    return Modifier
+        .clip(shape)
+        .background(fill)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+}
 
 /**
  * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),
@@ -145,7 +172,7 @@ fun ContentWindow(
             contentAlignment = Alignment.TopCenter,
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = WindowLogic.clampOpacity(opacity)),
+                color = windowColor().copy(alpha = WindowLogic.clampOpacity(opacity)),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shape = RoundedCornerShape(16.dp),
                 modifier = (if (cap != null) Modifier.widthIn(max = cap.dp) else Modifier).fillMaxSize(),

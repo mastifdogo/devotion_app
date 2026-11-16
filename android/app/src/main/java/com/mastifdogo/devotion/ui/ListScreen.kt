@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -66,7 +67,7 @@ fun ListScreen(vm: MainViewModel) {
                 if (selected == EntryTab.BIBLE) {
                     BibleTab(vm, Modifier.fillMaxSize())
                 } else {
-                    EntriesTab(vm, selected, cards = hasWallpaper)
+                    EntriesTab(vm, selected)
                 }
             }
         }
@@ -112,7 +113,8 @@ private fun TabsBar(vm: MainViewModel, hasWallpaper: Boolean) {
 }
 
 @Composable
-private fun EntriesTab(vm: MainViewModel, tab: EntryTab, cards: Boolean) {
+private fun EntriesTab(vm: MainViewModel, tab: EntryTab) {
+    val card = itemCardModifier(vm.appWallpaper != null, vm.windowOpacity, vm.listItemShade)
     val all = vm.entries
     val entries = remember(all, tab) { EntryKinds.entriesFor(tab, all) }
     val locale = Locale.getDefault()
@@ -123,19 +125,17 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab, cards: Boolean) {
         if (entries.isEmpty()) {
             EmptyState(vm, tab)
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 4.dp)) {
                 items(entries, key = { it.id }) { entry ->
                     EntryRow(
-                        card = cards,
+                        card = card,
                         entry = entry,
                         heading = EntryKinds.heading(entry, locale, zone),
                         audioCached = vm.isAudioCached(entry),
                         audioAvailable = vm.playerOffer(entry) is PlayerOffer.Play,
-                        itemFill = itemCardFill(vm.listItemShade),
                         downloading = vm.isAudioDownloading(entry),
                         onClick = { vm.open(Screen.Detail(entry.id)) },
                     )
-                    if (!cards) HorizontalDivider()
                 }
             }
         }
@@ -216,12 +216,11 @@ private fun EmptyState(vm: MainViewModel, tab: EntryTab) {
  */
 @Composable
 private fun EntryRow(
-    card: Boolean,
+    card: Modifier,
     entry: Entry,
     heading: String?,
     audioCached: Boolean,
     audioAvailable: Boolean,
-    itemFill: Color,
     downloading: Boolean,
     onClick: () -> Unit,
 ) {
@@ -229,18 +228,9 @@ private fun EntryRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // In the text window each item is an opaque card so it stays distinct at any opacity.
-            .then(
-                if (card) {
-                    Modifier
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(itemFill)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                } else {
-                    Modifier
-                },
-            )
+            // Every item is a card, shaded like the website (see itemCardModifier).
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .then(card)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

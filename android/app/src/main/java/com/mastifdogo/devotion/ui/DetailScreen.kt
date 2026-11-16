@@ -47,6 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +64,12 @@ import java.util.Locale
 
 /** The range whose highlight/comment dialog is open, and the annotation already on it (if any). */
 private class EditTarget(val passage: Passage, val existing: Annotation?)
+
+/** The text a dialog quotes: body[[passage]] clamped to the body. */
+private fun quoteOf(body: String, passage: Passage): String {
+    val start = passage.start.coerceIn(0, body.length)
+    return body.substring(start, passage.end.coerceIn(start, body.length))
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,8 +129,8 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
     if (target != null) {
         val existing = target.existing
         AnnotationDialog(
-            body = entry.body,
-            target = target,
+            quote = quoteOf(entry.body, target.passage),
+            existing = existing,
             initialColor = vm.lastHighlightColor,
             dark = dark,
             onDismiss = { editing = null },
@@ -164,25 +172,14 @@ private fun DetailContent(
             Spacer(modifier = Modifier.height(4.dp))
             Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
         }
-        if (vm.appWallpaper != null) {
-            // Like the list item cards: the window's colour, the list item shade on top, an outline.
-            val shape = RoundedCornerShape(12.dp)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(shape)
-                    .background(itemCardFill(vm.listItemShade))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-                    .padding(12.dp),
-            ) {
-                summary()
-            }
-        } else {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    summary()
-                }
-            }
+        // Drawn like every list item card (see itemCardModifier), with or without a wallpaper.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(itemCardModifier(vm.appWallpaper != null, vm.windowOpacity, vm.listItemShade))
+                .padding(12.dp),
+        ) {
+            summary()
         }
     }
 
@@ -282,95 +279,6 @@ private fun Header(vm: MainViewModel, entry: Entry) {
             TextButton(onClick = { vm.openBibleAt(scripture) }) { Text("Open in Bible") }
         }
     }
-}
-
-// ---- highlight / comment dialog -----------------------------------------------------------------
-
-@Composable
-private fun AnnotationDialog(
-    body: String,
-    target: EditTarget,
-    initialColor: String,
-    dark: Boolean,
-    onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit,
-    onDelete: (() -> Unit)?,
-) {
-    val existing = target.existing
-    var color by remember(target) { mutableStateOf(existing?.color ?: initialColor) }
-    var comment by remember(target) { mutableStateOf(existing?.comment ?: "") }
-    val start = target.passage.start.coerceIn(0, body.length)
-    val quoted = body.substring(start, target.passage.end.coerceIn(start, body.length))
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (existing != null) "Edit highlight" else "Comment") },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                Text(
-                    text = "“$quoted”",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontStyle = FontStyle.Italic,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    for (name in TextLogic.HIGHLIGHT_COLORS) {
-                        val swatch = highlightColor(name, dark) ?: Color.Gray
-                        val selected = color == name
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 10.dp)
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(swatch)
-                                .border(
-                                    width = if (selected) 3.dp else 1.dp,
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.outline
-                                    },
-                                    shape = CircleShape,
-                                )
-                                .clickable { color = name },
-                        )
-                    }
-                }
-                TextButton(
-                    onClick = { color = TextLogic.COLOR_NONE },
-                    enabled = color != TextLogic.COLOR_NONE,
-                ) {
-                    Text(if (color == TextLogic.COLOR_NONE) "No highlight colour" else "Remove highlight")
-                }
-                OutlinedTextField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = { Text("Comment") },
-                    minLines = 3,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (color == TextLogic.COLOR_NONE && comment.isBlank() && existing != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Saving now removes this highlight.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (onDelete != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onDelete) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = { onSave(color, comment) }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 // ---- notes --------------------------------------------------------------------------------------
@@ -509,10 +417,7 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
                 } else {
                     Spacer(modifier = Modifier.size(1.dp))
                 }
-                // Playback speed: each tap steps to the next speed.
-                OutlinedButton(onClick = { vm.cyclePlaybackSpeed() }) {
-                    Text(MainViewModel.speedLabel(vm.playbackSpeed))
-                }
+                SpeedControl(vm)
             }
 
             if (vm.isAudioDownloading(entry)) {
@@ -542,6 +447,35 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
             }
         }
       }
+    }
+}
+
+/** "−  1.25×  +": steps through the playback speeds (disabled at the ends). */
+@Composable
+private fun SpeedControl(vm: MainViewModel) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(
+            onClick = { vm.stepPlaybackSpeed(-1) },
+            enabled = vm.canSlowDown,
+            modifier = Modifier.semantics { contentDescription = "Slower" },
+        ) {
+            Text("\u2212", style = MaterialTheme.typography.titleLarge)
+        }
+        Box(
+            modifier = Modifier
+                .then(itemCardModifier(vm.appWallpaper != null, vm.windowOpacity, vm.listItemShade, RoundedCornerShape(8.dp)))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(MainViewModel.speedLabel(vm.playbackSpeed), style = MaterialTheme.typography.labelLarge)
+        }
+        IconButton(
+            onClick = { vm.stepPlaybackSpeed(1) },
+            enabled = vm.canSpeedUp,
+            modifier = Modifier.semantics { contentDescription = "Faster" },
+        ) {
+            Text("+", style = MaterialTheme.typography.titleLarge)
+        }
     }
 }
 

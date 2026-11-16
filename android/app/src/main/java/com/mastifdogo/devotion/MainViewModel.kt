@@ -38,6 +38,7 @@ import com.mastifdogo.devotion.data.WallpaperStore
 import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.AutoSync
+import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
@@ -223,6 +224,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         player?.setPlaybackSpeed(speed)
     }
 
+    val canSlowDown: Boolean
+        get() = PLAYBACK_SPEEDS.indexOf(playbackSpeed) > 0
+
+    val canSpeedUp: Boolean
+        get() = PLAYBACK_SPEEDS.indexOf(playbackSpeed) < PLAYBACK_SPEEDS.size - 1
+
+    /** One step slower (-1) or faster (+1) through [PLAYBACK_SPEEDS], stopping at the ends. */
+    fun stepPlaybackSpeed(direction: Int) {
+        val index = PLAYBACK_SPEEDS.indexOf(playbackSpeed).coerceAtLeast(0)
+        val next = (index + direction).coerceIn(0, PLAYBACK_SPEEDS.size - 1)
+        if (next != index) updatePlaybackSpeed(PLAYBACK_SPEEDS[next])
+    }
+
     /** Steps to the next speed in [PLAYBACK_SPEEDS], wrapping around. */
     fun cyclePlaybackSpeed() {
         val index = PLAYBACK_SPEEDS.indexOf(playbackSpeed)
@@ -403,7 +417,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Live annotations of one entry. */
     fun annotationsFor(entryId: Long): List<Annotation> =
-        annotations.map { it.annotation }.filter { it.entryId == entryId && !it.deleted }
+        annotations.map { it.annotation }.filter { TextLogic.isEntryAnnotation(it) && it.entryId == entryId && !it.deleted }
+
+    /** Live annotations of one Bible chapter in one version ([ref] chapter is 1-based). */
+    fun bibleAnnotations(ref: BibleRef): List<Annotation> =
+        annotations.map { it.annotation }.filter { !it.deleted && TextLogic.isOnChapter(it, ref.bibleId, ref.book, ref.chapter) }
 
     /**
      * Creates, changes or removes the annotation of a passage. [existing] is the annotation being
@@ -417,6 +435,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         existing: Annotation?,
         color: String,
         comment: String,
+        bible: BibleRef? = null,
     ): Boolean {
         if (profile == null) {
             openProfilePrompt()
@@ -436,13 +455,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             Annotation(
                 id = UUID.randomUUID().toString(),
-                entryId = entryId,
+                // Bible annotations have entry_id 0 and say which version, book and chapter.
+                entryId = if (bible != null) 0L else entryId,
                 start = start,
                 end = end,
                 color = cleanColor,
                 comment = text,
                 updatedAt = now,
                 deleted = false,
+                bibleId = bible?.bibleId,
+                book = bible?.book,
+                chapter = bible?.chapter,
             )
         }
         annotations = TextLogic.upsertLocal(annotations, edited)
@@ -452,9 +475,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Highlights body[[start], [end]) of an entry in the last used colour (always a new annotation). */
-    fun highlightRange(entryId: Long, start: Int, end: Int): Boolean {
+    fun highlightRange(entryId: Long, start: Int, end: Int, bible: BibleRef? = null): Boolean {
         if (start >= end) return true
-        return saveAnnotation(entryId, start, end, null, lastHighlightColor, "")
+        return saveAnnotation(entryId, start, end, null, lastHighlightColor, "", bible)
+    }
+
+    /** Saves the note on a whole Bible chapter (start = end = 0); an empty text removes it. */
+    fun saveChapterNote(ref: BibleRef, text: String): Boolean {
+        val existing = TextLogic.chapterNote(annotations.map { it.annotation }, ref.bibleId, ref.book, ref.chapter)
+        return saveAnnotation(0L, 0, 0, existing, TextLogic.COLOR_NONE, text, ref)
     }
 
     /** Deletes an annotation (highlight and comment). */
@@ -522,8 +551,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         for (item in unsent) {
             val stored = withContext(Dispatchers.IO) { api.putAnnotation(url, profileId, item) }
             if (!sameProfileContext(key, profileId)) return
-            // The stored copy is at least as new as what was sent; a newer local edit stays dirty.
-            annotations = TextLogic.mergeRemote(annotations, listOf(stored))
+            // Uploaded: clean unless it was edited again meanwhile (then it uploads next round).
+            annotations = TextLogic.markUploaded(annotations, item, stored)
         }
         if (unsent.isNotEmpty()) persistAnnotations()
 

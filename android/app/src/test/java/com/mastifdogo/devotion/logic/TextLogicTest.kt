@@ -89,27 +89,32 @@ class TextLogicTest {
     // ---- merge ------------------------------------------------------------------------------
 
     @Test
-    fun mergeRemote_laterWins() {
+    fun mergeRemote_dirtyLocalAlwaysWinsCleanIsReplaced() {
         val local = listOf(
             StoredAnnotation(ann("same", 0, 5, "2026-11-15T12:00:00.000Z", comment = "local"), dirty = true),
             StoredAnnotation(ann("localNewer", 0, 5, "2026-11-15T13:00:00.000Z", comment = "local"), dirty = true),
+            // The website edited it later, but the app's unsent edit still wins.
             StoredAnnotation(ann("remoteNewer", 0, 5, "2026-11-15T12:00:00.000Z", comment = "local"), dirty = true),
+            StoredAnnotation(ann("clean", 0, 5, "2026-11-15T14:00:00.000Z", comment = "local"), dirty = false),
             StoredAnnotation(ann("untouched", 0, 5), dirty = false),
         )
         val remote = listOf(
             ann("same", 0, 5, "2026-11-15T12:00:00.000Z", comment = "server"),
             ann("localNewer", 0, 5, "2026-11-15T12:30:00.000Z", comment = "server"),
             ann("remoteNewer", 0, 5, "2026-11-15T12:30:00.000Z", comment = "server"),
+            // Clean local copies take the server's, even an older one.
+            ann("clean", 0, 5, "2026-11-15T10:00:00.000Z", comment = "server"),
             ann("brandNew", 7, 9, comment = "server"),
         )
         val merged = TextLogic.mergeRemote(local, remote).associateBy { it.annotation.id }
-        assertEquals(5, merged.size)
-        assertEquals("server", merged.getValue("same").annotation.comment)
-        assertFalse(merged.getValue("same").dirty)
-        assertEquals("local", merged.getValue("localNewer").annotation.comment)
-        assertTrue(merged.getValue("localNewer").dirty)
-        assertEquals("server", merged.getValue("remoteNewer").annotation.comment)
-        assertFalse(merged.getValue("remoteNewer").dirty)
+        assertEquals(6, merged.size)
+        for (id in listOf("same", "localNewer", "remoteNewer")) {
+            assertEquals(id, "local", merged.getValue(id).annotation.comment)
+            assertTrue(id, merged.getValue(id).dirty)
+        }
+        assertEquals("server", merged.getValue("clean").annotation.comment)
+        assertFalse(merged.getValue("clean").dirty)
+        assertEquals("server", merged.getValue("brandNew").annotation.comment)
         assertFalse(merged.getValue("brandNew").dirty)
         assertFalse(merged.getValue("untouched").dirty)
     }
@@ -127,8 +132,9 @@ class TextLogicTest {
             ann("neverSeenTombstone", 0, 5, deleted = true),
         )
         val merged = TextLogic.mergeRemote(local, remote)
-        assertEquals(listOf("deletedHere"), merged.map { it.annotation.id })
-        assertTrue(merged[0].dirty)
+        // Dirty deletions stay until uploaded; a clean one deleted on the server is dropped.
+        assertEquals(listOf("deletedHere", "deletedAndUploaded"), merged.map { it.annotation.id })
+        assertTrue(merged.all { it.dirty })
     }
 
     @Test
@@ -142,5 +148,57 @@ class TextLogicTest {
         assertEquals(listOf("a", "b"), appended.map { it.annotation.id })
         assertFalse(appended[0].dirty)
         assertTrue(appended[1].dirty)
+    }
+
+    @Test
+    fun markUploaded_cleansOnlyWhatWasSent() {
+        val sent = ann("a", 0, 5, "2026-11-15T12:00:00.000Z", comment = "v1")
+        val stored = sent.copy(source = "app")
+        val cleaned = TextLogic.markUploaded(listOf(StoredAnnotation(sent, dirty = true)), sent, stored)
+        assertEquals(listOf(StoredAnnotation(stored, dirty = false)), cleaned)
+        // Edited again while uploading: the newer edit stays dirty.
+        val newer = sent.copy(comment = "v2", updatedAt = "2026-11-15T12:00:01.000Z")
+        val kept = TextLogic.markUploaded(listOf(StoredAnnotation(newer, dirty = true)), sent, stored)
+        assertEquals(listOf(StoredAnnotation(newer, dirty = true)), kept)
+        // An uploaded deletion disappears; other annotations are untouched.
+        val gone = sent.copy(deleted = true)
+        val other = StoredAnnotation(ann("b", 1, 2), dirty = true)
+        assertEquals(listOf(other), TextLogic.markUploaded(listOf(StoredAnnotation(gone, true), other), gone, gone))
+    }
+
+    @Test
+    fun entryAndChapterNotesAreSeparate() {
+        val entryNote = ann("e", 0, 0, comment = "entry")
+        val bibleNote = Annotation("b", 0, 0, 0, "none", "chapter", "2026-11-15T12:00:00.000Z", false, "kjv", 42, 3)
+        val bibleHl = Annotation("h", 0, 10003, 20005, "yellow", "", "2026-11-15T12:00:00.000Z", false, "kjv", 42, 3)
+        val list = listOf(entryNote, bibleNote, bibleHl)
+        assertEquals("e", TextLogic.entryNote(list, 1)?.id)
+        assertNull(TextLogic.entryNote(list, 0))
+        assertEquals("b", TextLogic.chapterNote(list, "kjv", 42, 3)?.id)
+        assertNull(TextLogic.chapterNote(list, "asv", 42, 3))
+        assertNull(TextLogic.chapterNote(list, "kjv", 42, 4))
+        assertTrue(TextLogic.isOnChapter(bibleHl, "kjv", 42, 3))
+        assertTrue(TextLogic.isEntryAnnotation(entryNote))
+        assertFalse(TextLogic.isEntryAnnotation(bibleHl))
+    }
+
+    @Test
+    fun annotationJson_bibleFieldsAreOptional() {
+        val json = com.mastifdogo.devotion.data.AppJson
+        val old = json.decodeFromString(Annotation.serializer(), """{"id":"x","entry_id":12,"start":1,"end":4,"updated_at":"t"}""")
+        assertEquals(12L, old.entryId)
+        assertNull(old.bibleId)
+        assertNull(old.book)
+        assertNull(old.chapter)
+        val bible = json.decodeFromString(
+            Annotation.serializer(),
+            """{"id":"y","entry_id":0,"start":20005,"end":20010,"color":"blue","updated_at":"t","bible_id":"kjv","book":0,"chapter":1,"source":"web","extra":1}""",
+        )
+        assertEquals(0L, bible.entryId)
+        assertEquals("kjv", bible.bibleId)
+        assertEquals(0, bible.book)
+        assertEquals(1, bible.chapter)
+        val encoded = json.encodeToString(Annotation.serializer(), bible.copy(source = "app"))
+        assertTrue(encoded, encoded.contains("\"bible_id\":\"kjv\"") && encoded.contains("\"source\":\"app\"") && encoded.contains("\"chapter\":1"))
     }
 }

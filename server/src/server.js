@@ -83,24 +83,56 @@ export function entryJson(row, audio = [], defaultVoice = '') {
 const COLORS = new Set(['yellow', 'green', 'blue', 'pink', 'none']);
 
 export function annotationJson(row) {
-	return { id: row.id, entry_id: row.entry_id, start: row.start, end: row.end, color: row.color, comment: row.comment, updated_at: row.updated_at, deleted: Boolean(row.deleted) };
+	const out = { id: row.id, entry_id: row.entry_id, start: row.start, end: row.end, color: row.color, comment: row.comment, updated_at: row.updated_at, deleted: Boolean(row.deleted), source: row.source || 'app' };
+	if (row.bible_id) Object.assign(out, { bible_id: row.bible_id, book: row.book, chapter: row.chapter });
+	return out;
 }
 
-/** Checks an annotation sent by the app; returns it cleaned or throws. */
+/**
+ * Checks an annotation sent by the app or the website; returns it cleaned or throws.
+ * An entry annotation has an entry_id and character offsets into the entry's body.
+ * A Bible annotation has entry_id 0, bible_id, book (0-based) and chapter (1-based),
+ * and positions written verse index × 10000 + offset inside that verse's text.
+ */
 export function parseAnnotation(id, body) {
 	const bad = (what) => Object.assign(new Error(`The annotation's ${what} is not valid.`), { status: 400 });
 	if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) throw bad('id');
 	const int = (v) => Number.isInteger(v) && v >= 0 && v <= 10_000_000;
-	if (!Number.isInteger(body.entry_id) || body.entry_id < 1) throw bad('entry_id');
+	const isBible = body.bible_id != null;
+	let bible = { bible_id: null, book: null, chapter: null };
+	if (isBible) {
+		if (typeof body.bible_id !== 'string' || !/^[a-z0-9]{1,20}$/.test(body.bible_id)) throw bad('bible_id');
+		if (!Number.isInteger(body.book) || body.book < 0 || body.book > 200) throw bad('book');
+		if (!Number.isInteger(body.chapter) || body.chapter < 1 || body.chapter > 200) throw bad('chapter');
+		if (body.entry_id != null && body.entry_id !== 0) throw bad('entry_id');
+		bible = { bible_id: body.bible_id, book: body.book, chapter: body.chapter };
+	} else if (!Number.isInteger(body.entry_id) || body.entry_id < 1) throw bad('entry_id');
 	if (!int(body.start) || !int(body.end) || body.end < body.start) throw bad('range');
 	if (!COLORS.has(body.color)) throw bad('color');
 	if (typeof body.comment !== 'string' || body.comment.length > 20_000) throw bad('comment');
-	const time = typeof body.updated_at === 'string' ? Date.parse(body.updated_at) : NaN;
+	const source = body.source === 'web' ? 'web' : 'app';
+	// The website's edits are timed by this server; the app's by the phone.
+	const time = source === 'web' ? Date.now() : typeof body.updated_at === 'string' ? Date.parse(body.updated_at) : NaN;
 	if (Number.isNaN(time)) throw bad('updated_at');
-	return { id, entry_id: body.entry_id, start: body.start, end: body.end, color: body.color, comment: body.comment, updated_at: new Date(time).toISOString(), deleted: body.deleted === true ? 1 : 0 };
+	const base = typeof body.base_updated_at === 'string' && !Number.isNaN(Date.parse(body.base_updated_at)) ? new Date(body.base_updated_at).toISOString() : null;
+	return { id, entry_id: isBible ? 0 : body.entry_id, ...bible, start: body.start, end: body.end, color: body.color, comment: body.comment, updated_at: new Date(time).toISOString(), deleted: body.deleted === true ? 1 : 0, source, base };
 }
 
-export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir, log = console }) {
+/**
+ * Whether an incoming edit replaces the stored one. The app wins every
+ * conflict with the website: an app edit always replaces a website edit, and
+ * a website edit is refused when the app changed the annotation since the
+ * website last saw it. Between two phones (or two browsers) the later edit wins.
+ */
+export function annotationWins(stored, incoming) {
+	if (!stored) return true;
+	const storedSource = stored.source || 'app';
+	if (incoming.source === 'app') return storedSource === 'web' || incoming.updated_at >= stored.updated_at;
+	if (storedSource === 'app') return incoming.base !== null && incoming.base === stored.updated_at;
+	return true;
+}
+
+export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups = null, audioDir, log = console }) {
 	const sessions = new Map(); // sid -> expiry
 	let loginFailures = 0;
 	let lastBackgroundError = null; // shown once by the admin page, then cleared
@@ -201,6 +233,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		profiles: db.prepare(`SELECT p.id, p.name, p.created_at, (SELECT COUNT(*) FROM annotations a WHERE a.profile_id = p.id AND a.deleted = 0) AS notes FROM profiles p ORDER BY p.name`).all(),
 		bibles: bibles.list(),
 		archive: { ...archiver.status, configured: archiver.configured(), running: archiver.running, waiting: archiver.due().length, archived_total: db.prepare('SELECT COUNT(*) AS n FROM entries WHERE archived_at IS NOT NULL AND deleted_at IS NULL').get().n },
+		backup: backups ? backups.view() : null,
 	});
 
 	const audioRows = db.prepare('SELECT voice, file, bytes, sha256 FROM entry_audio WHERE entry_id = ? AND file IS NOT NULL ORDER BY voice');
@@ -291,7 +324,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		if (since && Number.isNaN(Date.parse(since))) throw new HttpError(400, '"since" is not a timestamp.');
 		const rows = since
 			? db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND server_updated_at > ? ORDER BY server_updated_at').all(profile.id, new Date(since).toISOString())
-			: db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND deleted = 0 ORDER BY entry_id, start').all(profile.id);
+			: db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND deleted = 0 ORDER BY entry_id, bible_id, book, chapter, start').all(profile.id);
 		send(res, 200, { annotations: rows.map(annotationJson), server_time: serverTime });
 	});
 
@@ -325,12 +358,17 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		const profile = requireProfile(m[1]);
 		const incoming = parseAnnotation(m[2], await readJson(req));
 		const stored = db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND id = ?').get(profile.id, incoming.id);
-		// The later edit wins, so two devices on one profile can't undo each other with stale data.
-		if (!stored || incoming.updated_at >= stored.updated_at) {
-			db.prepare(`INSERT INTO annotations (profile_id, id, entry_id, start, end, color, comment, updated_at, deleted, server_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(profile_id, id) DO UPDATE SET entry_id = excluded.entry_id, start = excluded.start, end = excluded.end, color = excluded.color,
-					comment = excluded.comment, updated_at = excluded.updated_at, deleted = excluded.deleted, server_updated_at = excluded.server_updated_at`)
-				.run(profile.id, incoming.id, incoming.entry_id, incoming.start, incoming.end, incoming.color, incoming.comment, incoming.updated_at, incoming.deleted, new Date().toISOString());
+		const wins = annotationWins(stored, incoming);
+		if (wins) {
+			// A website edit always sorts after the edit it replaced, even if the phone's clock runs ahead.
+			if (stored && incoming.source === 'web' && incoming.updated_at <= stored.updated_at) incoming.updated_at = new Date(Date.parse(stored.updated_at) + 1).toISOString();
+			db.prepare(`INSERT INTO annotations (profile_id, id, entry_id, bible_id, book, chapter, start, end, color, comment, updated_at, deleted, source, server_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(profile_id, id) DO UPDATE SET entry_id = excluded.entry_id, bible_id = excluded.bible_id, book = excluded.book, chapter = excluded.chapter, start = excluded.start, end = excluded.end, color = excluded.color,
+					comment = excluded.comment, updated_at = excluded.updated_at, deleted = excluded.deleted, source = excluded.source, server_updated_at = excluded.server_updated_at`)
+				.run(profile.id, incoming.id, incoming.entry_id, incoming.bible_id, incoming.book, incoming.chapter, incoming.start, incoming.end, incoming.color, incoming.comment, incoming.updated_at, incoming.deleted, incoming.source, new Date().toISOString());
+		} else if (incoming.source === 'web') {
+			// The website is told what the app has, and shows that instead.
+			return send(res, 409, { error: 'This was changed in the app meanwhile; the app\'s version is kept.', annotation: annotationJson(stored) });
 		}
 		send(res, 200, annotationJson(db.prepare('SELECT * FROM annotations WHERE profile_id = ? AND id = ?').get(profile.id, incoming.id)));
 	});
@@ -638,6 +676,43 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		if (!archiver.configured()) throw new HttpError(409, 'Enter and save the share first.');
 		background(archiver.runOnce(), 'Archive');
 		send(res, 202, { ok: true });
+	});
+
+	const requireBackups = () => {
+		if (!backups) throw new HttpError(404, 'Backups are not available on this server.');
+		return backups;
+	};
+
+	route('POST', /^\/admin\/api\/backup\/test$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		send(res, 200, await requireBackups().test());
+	});
+
+	route('POST', /^\/admin\/api\/backup\/run$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		const b = requireBackups();
+		if (!b.configured()) throw new HttpError(409, 'Enter and save the backup share first.');
+		if (b.running) throw new HttpError(409, 'A backup is already running.');
+		background(b.runOnce(), 'Backup');
+		send(res, 202, { ok: true });
+	});
+
+	route('GET', /^\/admin\/api\/backup\/list$/, async (req, res) => {
+		requireAdmin(req);
+		send(res, 200, { backups: await requireBackups().list(), keep: requireBackups().keep() });
+	});
+
+	// Replaces this server's database with a backup from the share, then restarts.
+	route('POST', /^\/admin\/api\/backup\/restore$/, async (req, res) => {
+		requireAdmin(req);
+		const { name, confirm } = await readJson(req);
+		if (confirm !== 'RESTORE') throw new HttpError(400, 'Type RESTORE to confirm.');
+		const b = requireBackups();
+		const result = await b.restore(String(name || ''));
+		send(res, 202, { ...result, restarting: true });
+		b.restartSoon();
 	});
 
 	route('GET', /^\/admin\/api\/update\/check$/, async (req, res) => {

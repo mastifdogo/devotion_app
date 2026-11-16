@@ -49,7 +49,20 @@ object TextLogic {
     /** The live whole-entry note of [entryId] (the most recently changed one), or null. */
     fun entryNote(annotations: List<Annotation>, entryId: Long): Annotation? =
         annotations
-            .filter { !it.deleted && it.entryId == entryId && isEntryNote(it) }
+            .filter { !it.deleted && it.bibleId == null && it.entryId == entryId && isEntryNote(it) }
+            .maxWithOrNull { x, y -> compareTimestamps(x.updatedAt, y.updatedAt) }
+
+    /** True for annotations on an entry (not on a Bible chapter). */
+    fun isEntryAnnotation(a: Annotation): Boolean = a.bibleId == null
+
+    /** True when [a] is on chapter [chapter] (1-based) of book [book] in Bible version [bibleId]. */
+    fun isOnChapter(a: Annotation, bibleId: String, book: Int, chapter: Int): Boolean =
+        a.bibleId == bibleId && a.book == book && a.chapter == chapter
+
+    /** The live note on a whole Bible chapter (start = end = 0), the most recently changed one. */
+    fun chapterNote(annotations: List<Annotation>, bibleId: String, book: Int, chapter: Int): Annotation? =
+        annotations
+            .filter { !it.deleted && isOnChapter(it, bibleId, book, chapter) && isEntryNote(it) }
             .maxWithOrNull { x, y -> compareTimestamps(x.updatedAt, y.updatedAt) }
 
     /** The text an annotation points at, with its range clamped to the body. */
@@ -87,21 +100,36 @@ object TextLogic {
     // ---- merge ------------------------------------------------------------------------------
 
     /**
-     * Applies annotations received from the server. A server copy that is at least as new as the
-     * local one replaces it (and is clean); a newer local edit stays and keeps its dirty flag.
-     * Deleted annotations that no longer need uploading are dropped.
+     * Applies annotations received from the server. The app wins conflicts: a dirty (not yet
+     * uploaded) local annotation is always kept, whatever the timestamps, and is uploaded next.
+     * Clean local copies are replaced by the server's. Deleted annotations that no longer need
+     * uploading are dropped.
      */
     fun mergeRemote(local: List<StoredAnnotation>, remote: List<Annotation>): List<StoredAnnotation> {
         val byId = LinkedHashMap<String, StoredAnnotation>()
         for (item in local) byId[item.annotation.id] = item
         for (r in remote) {
             val mine = byId[r.id]
-            if (mine == null || compareTimestamps(r.updatedAt, mine.annotation.updatedAt) >= 0) {
-                byId[r.id] = StoredAnnotation(r, dirty = false)
-            }
+            if (mine == null || !mine.dirty) byId[r.id] = StoredAnnotation(r, dirty = false)
         }
         return byId.values.filter { it.dirty || !it.annotation.deleted }
     }
+
+    /**
+     * After [sent] was uploaded and the server answered with [stored]: if the local copy is still
+     * exactly what was sent (no newer edit meanwhile), it becomes the server's copy and clean;
+     * otherwise the newer local edit stays dirty. A clean deletion is dropped.
+     */
+    fun markUploaded(local: List<StoredAnnotation>, sent: Annotation, stored: Annotation): List<StoredAnnotation> =
+        local.mapNotNull { item ->
+            if (item.annotation.id != sent.id || !item.dirty || item.annotation != sent) {
+                item
+            } else if (stored.deleted) {
+                null
+            } else {
+                StoredAnnotation(stored, dirty = false)
+            }
+        }
 
     /** Inserts or replaces a locally edited annotation and marks it for upload. */
     fun upsertLocal(local: List<StoredAnnotation>, edited: Annotation): List<StoredAnnotation> {

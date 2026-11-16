@@ -83,7 +83,7 @@ class BackgroundSync(context: Context) {
         var list = file.annotations
         for (item in list.filter { it.dirty }.map { it.annotation }) {
             val stored = api.putAnnotation(server, profileId, item)
-            list = TextLogic.mergeRemote(list, listOf(stored))
+            list = TextLogic.markUploaded(list, item, stored)
         }
         val response = api.annotations(server, profileId, file.serverTime)
         list = TextLogic.mergeRemote(list, response.annotations)

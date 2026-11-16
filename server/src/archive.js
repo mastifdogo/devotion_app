@@ -18,7 +18,7 @@ export class ArchiveError extends Error {
 	}
 }
 
-function runCapture(cmd, args, { timeoutMs = 10 * 60 * 1000 } = {}) {
+export function runCapture(cmd, args, { timeoutMs = 10 * 60 * 1000 } = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 		let out = '';
@@ -65,6 +65,29 @@ export function explain(out) {
 	return out.trim().split('\n').pop()?.slice(0, 200) || 'no answer from smbclient';
 }
 
+/**
+ * Runs smbclient commands against the share named by the settings with this
+ * prefix (smb_share, smb_username, ...). The password goes in an auth file
+ * readable only by this user, never in the arguments.
+ */
+export async function smbRun(run, settings, prefix, commands) {
+	const dir = await mkdtemp(path.join(tmpdir(), 'devotion-smb-'));
+	try {
+		const auth = path.join(dir, 'auth');
+		const lines = [`username = ${settings.get(prefix + 'username') || 'guest'}`, `password = ${settings.get(prefix + 'password')}`];
+		if (settings.get(prefix + 'domain')) lines.push(`domain = ${settings.get(prefix + 'domain')}`);
+		await writeFile(auth, lines.join('\n') + '\n', { mode: 0o600 });
+		return await run('smbclient', [settings.get(prefix + 'share'), '-A', auth, '-c', commands.join('; ')]);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+/** mkdir for each level; "already exists" is the normal case and not an error. */
+export function mkdirs(parts) {
+	return parts.map((_, i) => `mkdir "${parts.slice(0, i + 1).join('\\')}"`);
+}
+
 export function entryText(entry) {
 	const head = [entry.kind === 'lesson' && entry.lesson_number ? `Lesson ${entry.lesson_number}: ${entry.title}` : entry.title, entry.entry_date, entry.scripture].filter(Boolean).join('\n');
 	const source = [entry.source_subject && `Email: ${entry.source_subject}`, entry.source_from && `From: ${entry.source_from}`, entry.received_at && `Received: ${entry.received_at}`].filter(Boolean).join('\n');
@@ -87,22 +110,12 @@ export class Archiver {
 	}
 
 	/** Runs smbclient commands against the share; the password never appears in the arguments. */
-	async smb(commands) {
-		const dir = await mkdtemp(path.join(tmpdir(), 'devotion-smb-'));
-		try {
-			const auth = path.join(dir, 'auth');
-			const lines = [`username = ${this.settings.get('smb_username') || 'guest'}`, `password = ${this.settings.get('smb_password')}`];
-			if (this.settings.get('smb_domain')) lines.push(`domain = ${this.settings.get('smb_domain')}`);
-			await writeFile(auth, lines.join('\n') + '\n', { mode: 0o600 });
-			return await this.run('smbclient', [this.settings.get('smb_share'), '-A', auth, '-c', commands.join('; ')]);
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
+	smb(commands) {
+		return smbRun(this.run, this.settings, 'smb_', commands);
 	}
 
-	/** mkdir for each level; "already exists" is the normal case and not an error. */
 	mkdirs(parts) {
-		return parts.map((_, i) => `mkdir "${parts.slice(0, i + 1).join('\\')}"`);
+		return mkdirs(parts);
 	}
 
 	/** Checks the share can be reached and written to, for the admin page's button. */

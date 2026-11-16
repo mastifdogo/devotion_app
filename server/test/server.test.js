@@ -521,7 +521,7 @@ test('profiles, and notes and highlights kept per profile', async (t) => {
 	for (const bad of [{ ...note, color: 'red' }, { ...note, start: 50 }, { ...note, entry_id: 0 }, { ...note, updated_at: 'yesterday' }, { ...note, comment: 5 }]) assert.equal((await put(maria.id, bad)).status, 400);
 	assert.equal((await put(maria.id, note, 'short')).status, 400);
 	assert.equal((await put(maria.id, note, 'has%20spaces%20and%20more')).status, 400);
-	assert.deepEqual(await (await put(maria.id, note)).json(), { id, ...note });
+	assert.deepEqual(await (await put(maria.id, note)).json(), { id, ...note, source: 'app' });
 
 	// An older edit from another device does not undo a newer one.
 	assert.equal((await (await put(maria.id, { ...note, comment: 'stale', updated_at: '2026-11-15T09:00:00.000Z' })).json()).comment, 'first');
@@ -539,6 +539,34 @@ test('profiles, and notes and highlights kept per profile', async (t) => {
 	await put(maria.id, { ...note, updated_at: '2026-11-15T12:00:00.000Z', deleted: true });
 	assert.deepEqual((await (await call(since)).json()).annotations.map((a) => a.deleted), [true]);
 	assert.equal((await (await call(`/api/profiles/${maria.id}/annotations`)).json()).annotations.length, 0);
+
+	// Highlights in the Bible: entry 0, a version, book and chapter; positions by verse.
+	const verse = { entry_id: 0, bible_id: 'kjv', book: 42, chapter: 3, start: 15 * 10000 + 4, end: 16 * 10000 + 12, color: 'green', comment: 'so loved', updated_at: '2026-11-15T10:00:00.000Z' };
+	const vid = 'b1b1b1b1-0000-4000-8000-000000000001';
+	assert.deepEqual(await (await put(maria.id, verse, vid)).json(), { id: vid, ...verse, deleted: false, source: 'app' });
+	for (const bad of [{ ...verse, bible_id: 'KJV!' }, { ...verse, book: -1 }, { ...verse, chapter: 0 }, { ...verse, entry_id: 5 }]) assert.equal((await put(maria.id, bad, vid)).status, 400);
+	const listed = (await (await call(`/api/profiles/${maria.id}/annotations`)).json()).annotations;
+	assert.deepEqual(listed.map((a) => [a.id, a.bible_id ?? null]), [[vid, 'kjv']]);
+
+	// The app wins conflicts with the website.
+	const wid = 'c2c2c2c2-0000-4000-8000-000000000002';
+	const fromWeb = { entry_id: 5, start: 1, end: 4, color: 'blue', comment: 'web', source: 'web' };
+	const webMade = await (await put(maria.id, fromWeb, wid)).json();
+	assert.equal(webMade.source, 'web');
+	assert.ok(Date.parse(webMade.updated_at) > Date.parse('2026-11-16T00:00:00Z') - 86400000 * 3650, 'timed by the server');
+	// An app edit made earlier by the clock still replaces the website's.
+	const appEdit = await (await put(maria.id, { entry_id: 5, start: 1, end: 4, color: 'pink', comment: 'phone', updated_at: '2020-01-01T00:00:00.000Z' }, wid)).json();
+	assert.deepEqual([appEdit.comment, appEdit.source], ['phone', 'app']);
+	// The website editing without having seen the app's version is refused and told what the app has.
+	const stale = await put(maria.id, { ...fromWeb, comment: 'web again', base_updated_at: webMade.updated_at }, wid);
+	assert.equal(stale.status, 409);
+	assert.equal((await stale.json()).annotation.comment, 'phone');
+	// Having seen it, the website may change it.
+	const seen = await (await put(maria.id, { ...fromWeb, comment: 'web after seeing', base_updated_at: appEdit.updated_at }, wid)).json();
+	assert.deepEqual([seen.comment, seen.source], ['web after seeing', 'web']);
+	assert.ok(seen.updated_at > appEdit.updated_at);
+	await put(maria.id, { ...verse, deleted: true, updated_at: '2026-11-15T13:00:00.000Z' }, vid);
+	await put(maria.id, { ...fromWeb, deleted: true, base_updated_at: seen.updated_at }, wid);
 
 	// Which Bible versions each person has in the app, for the website.
 	assert.deepEqual(await (await call(`/api/profiles/${maria.id}/bibles`)).json(), { bibles: [] });

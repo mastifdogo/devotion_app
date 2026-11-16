@@ -12,9 +12,12 @@ import { Voices } from './voices.js';
 import { Bibles } from './bibles.js';
 import { Archiver } from './archive.js';
 import { Wallpapers } from './wallpapers.js';
+import { Backups, takePendingRestore } from './backup.js';
 import { createServer } from './server.js';
 
 const config = loadConfig();
+// A backup restored from the admin page is swapped in before anything opens the database.
+if (config.dataDir !== ':memory:') takePendingRestore(config.dataDir);
 const db = openDb(config.dataDir);
 const settings = new Settings(db, config.env);
 
@@ -34,9 +37,10 @@ const bibles = new Bibles({ db, dataDir: config.dataDir });
 const tts = new Tts({ settings, audioDir, voices });
 const archiver = new Archiver({ db, settings, audioDir });
 const wallpapers = new Wallpapers({ db, dataDir: config.dataDir });
+const backups = new Backups({ db, settings, dataDir: config.dataDir });
 const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver });
 const updater = new Updater({ config, settings });
-const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir });
+const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups, audioDir });
 
 pipeline.adoptLegacyAudio();
 pipeline.reclassify();
@@ -44,11 +48,13 @@ pipeline.reclassify();
 server.listen(config.port, config.host, () => {
 	console.log(`devotion-server ${config.version} listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);
 	pipeline.start();
+	backups.start();
 });
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
 	process.on(signal, () => {
 		pipeline.stop();
+		backups.stop();
 		server.close(() => {
 			db.close();
 			process.exit(0);

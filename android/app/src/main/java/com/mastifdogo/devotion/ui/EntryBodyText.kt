@@ -1,12 +1,14 @@
 package com.mastifdogo.devotion.ui
 
 import android.content.Context
+import android.graphics.Typeface
 import android.os.Build
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.text.style.UnderlineSpan
 import android.util.TypedValue
 import android.view.ActionMode
@@ -19,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
@@ -50,6 +53,18 @@ fun EntryBodyText(
     onOpenAnnotation: (Annotation) -> Unit,
     onOpenLink: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** Ranges (body offsets) drawn as verse numbers: bold, smaller, primary colour. */
+    verseNumbers: List<Passage> = emptyList(),
+    /** A range (body offsets) marked with a tinted background, e.g. the referenced verses. */
+    marked: Passage? = null,
+    markColor: Color = Color.Unspecified,
+    /**
+     * When [scrollKey] changes and [scrollToOffset] is set, [onScrollTarget] receives the y (in
+     * pixels, from the top of this text) of the line holding that body offset, once laid out.
+     */
+    scrollToOffset: Int? = null,
+    scrollKey: Any? = null,
+    onScrollTarget: (Int) -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val style = MaterialTheme.typography.bodyLarge
@@ -61,8 +76,10 @@ fun EntryBodyText(
     val lineHeightPx = if (style.lineHeight.isSp) with(density) { style.lineHeight.toPx() } else 0f
 
     val markers = remember(body, annotations) { HighlightLogic.commentMarkers(annotations, body.length) }
-    val content = remember(body, annotations, links, markers, dark, linkColor) {
-        buildBodyText(body, annotations, links, markers, dark, linkColor)
+    val numberColor = colors.primary.toArgb()
+    val markArgb = if (markColor == Color.Unspecified) 0 else markColor.toArgb()
+    val content = remember(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor) {
+        buildBodyText(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor)
     }
     val callbacks = remember { BodyCallbacks() }
 
@@ -87,6 +104,20 @@ fun EntryBodyText(
                 view.setText(content, TextView.BufferType.SPANNABLE)
                 view.tag = content
             }
+            val target = scrollToOffset
+            if (target != null && scrollKey != null && scrollKey != callbacks.lastScrollKey) {
+                callbacks.lastScrollKey = scrollKey
+                val displayTarget = HighlightLogic.toDisplayStart(markers, target)
+                val report = onScrollTarget
+                // After the next layout pass, when the TextView knows where its lines are.
+                view.post {
+                    val layout = view.layout
+                    if (layout != null) {
+                        val offset = displayTarget.coerceIn(0, view.text.length)
+                        report(layout.getLineTop(layout.getLineForOffset(offset)) + view.totalPaddingTop)
+                    }
+                }
+            }
         },
     )
 }
@@ -101,6 +132,7 @@ private class BodyCallbacks {
     var onComment: (Int, Int) -> Unit = { _, _ -> }
     var onOpenAnnotation: (Annotation) -> Unit = {}
     var onOpenLink: (Int) -> Unit = {}
+    var lastScrollKey: Any? = null
 
     /** The current selection as a body range, or null when nothing (or only a marker) is selected. */
     fun selectedBodyRange(view: TextView): Pair<Int, Int>? {
@@ -212,8 +244,26 @@ private fun buildBodyText(
     markers: List<CommentMarker>,
     dark: Boolean,
     linkColor: Int,
+    verseNumbers: List<Passage>,
+    marked: Passage?,
+    markArgb: Int,
+    numberColor: Int,
 ): CharSequence {
     val text = SpannableString(HighlightLogic.displayText(body, markers))
+    // The marked range first, so highlights are drawn over it.
+    if (marked != null && markArgb != 0) {
+        val start = HighlightLogic.toDisplayStart(markers, marked.start)
+        val end = HighlightLogic.toDisplayEnd(markers, marked.end)
+        if (start < end) text.setSpan(BackgroundColorSpan(markArgb), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+    for (number in verseNumbers) {
+        val start = HighlightLogic.toDisplayStart(markers, number.start)
+        val end = HighlightLogic.toDisplayEnd(markers, number.end)
+        if (start >= end) continue
+        text.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(RelativeSizeSpan(0.75f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(ForegroundColorSpan(numberColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
     for (run in HighlightLogic.styledRuns(body.length, annotations, links)) {
         val start = HighlightLogic.toDisplayStart(markers, run.start)
         val end = HighlightLogic.toDisplayEnd(markers, run.end)

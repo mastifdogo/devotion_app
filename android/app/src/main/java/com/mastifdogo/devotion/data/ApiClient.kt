@@ -133,7 +133,8 @@ class ApiClient {
             .addPathSegments("api/profiles/$profileId/annotations")
             .addPathSegment(annotation.id)
             .build()
-        val payload = AppJson.encodeToString(Annotation.serializer(), annotation)
+        // "source": "app" makes the server let the phone's version win over website edits.
+        val payload = AppJson.encodeToString(Annotation.serializer(), annotation.copy(source = "app"))
         val request = Request.Builder().url(url)
             .header("Accept", "application/json")
             .put(payload.toRequestBody(jsonType))

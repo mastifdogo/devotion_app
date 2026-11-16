@@ -151,13 +151,24 @@ data class ErrorResponse(val error: String? = null)
 @Serializable
 data class Annotation(
     val id: String,
-    @SerialName("entry_id") val entryId: Long,
+    /** The entry, or 0 for an annotation on a Bible chapter. */
+    @SerialName("entry_id") val entryId: Long = 0L,
     val start: Int = 0,
     val end: Int = 0,
     val color: String = "none",
     val comment: String = "",
     @SerialName("updated_at") val updatedAt: String = "",
     val deleted: Boolean = false,
+    /**
+     * For a Bible annotation: the version id ("kjv"), the 0-based book index in that version and
+     * the 1-based chapter; [start]/[end] are then verse positions (see BibleTextLogic). All null for
+     * entry annotations (and from servers that predate Bible annotations).
+     */
+    @SerialName("bible_id") val bibleId: String? = null,
+    val book: Int? = null,
+    val chapter: Int? = null,
+    /** "app" on uploads from the phone (the server lets the app win conflicts); whatever the server sends back otherwise. */
+    val source: String? = null,
 )
 
 @Serializable

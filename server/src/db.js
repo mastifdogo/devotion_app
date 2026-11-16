@@ -110,6 +110,11 @@ export function openDb(dataDir) {
 	for (const [column, type] of [['received_at', 'TEXT'], ['archived_at', 'TEXT'], ['archive_path', 'TEXT'], ['refs', 'TEXT'], ['kind', "TEXT NOT NULL DEFAULT 'daily_reading'"], ['lesson_number', 'INTEGER'], ['label_manual', 'INTEGER NOT NULL DEFAULT 0'], ['auto_date', 'TEXT']]) {
 		if (!have.has(column)) db.exec(`ALTER TABLE entries ADD COLUMN ${column} ${type}`);
 	}
+	// Highlights in the Bible (entry_id 0) and who made each edit ('app' or 'web').
+	const haveA = new Set(db.prepare('PRAGMA table_info(annotations)').all().map((c) => c.name));
+	for (const [column, type] of [['bible_id', 'TEXT'], ['book', 'INTEGER'], ['chapter', 'INTEGER'], ['source', "TEXT NOT NULL DEFAULT 'app'"]]) {
+		if (!haveA.has(column)) db.exec(`ALTER TABLE annotations ADD COLUMN ${column} ${type}`);
+	}
 	// Audio used to be one file per entry, in the entries table. It moves to
 	// entry_audio with an unknown voice, which the pipeline fills in at startup.
 	db.exec(`INSERT OR IGNORE INTO entry_audio (entry_id, voice, file, bytes, sha256, error, created_at)

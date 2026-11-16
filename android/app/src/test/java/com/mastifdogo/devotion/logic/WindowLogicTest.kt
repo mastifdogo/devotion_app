@@ -66,4 +66,30 @@ class WindowLogicTest {
         assertEquals("0%", WindowLogic.shadeLabel(0f))
         assertEquals("100%", WindowLogic.shadeLabel(1.5f))
     }
+
+    @Test
+    fun darken_mixesTowardBlackPerChannel() {
+        assertEquals(0xFF25241F.toInt(), WindowLogic.darken(0xFF25241F.toInt(), 0f))
+        assertEquals(0xFF000000.toInt(), WindowLogic.darken(0xFFFFFFFF.toInt(), 1f))
+        // 22% black over white: 255 * 0.78 = 198.9 -> 199 (0xC7).
+        assertEquals(0xFFC7C7C7.toInt(), WindowLogic.darken(0xFFFFFFFF.toInt(), 0.22f))
+        // The alpha of the input is ignored; the result is opaque.
+        assertEquals(0xFF808080.toInt(), WindowLogic.darken(0x00808080, 0f))
+    }
+
+    @Test
+    fun itemFill_matchesTheWebsite() {
+        val card = 0xFF25241F.toInt() // the website's dark window colour
+        // With a wallpaper: window colour darkened by shade x 22%, at the window opacity.
+        val fill = WindowLogic.itemFillArgb(card, hasWallpaper = true, windowOpacity = 0.7f, shade = 1f)
+        assertEquals((0.7f * 255f).toInt() + 1, (fill ushr 24)) // 178.5 -> 179
+        assertEquals(WindowLogic.darken(card, 0.22f) and 0xFFFFFF, fill and 0xFFFFFF)
+        // Shade 0 with a wallpaper: the window colour itself at the window opacity.
+        assertEquals(0xFF25241F.toInt(), WindowLogic.itemFillArgb(card, true, 1f, 0f))
+        // Without a wallpaper: the background darkened by shade x 10%, opaque, whatever the window opacity.
+        val bg = 0xFFF6F4EF.toInt()
+        assertEquals(WindowLogic.darken(bg, 0.04f), WindowLogic.itemFillArgb(bg, false, 0.5f, 0.4f))
+        assertEquals(0xFF, WindowLogic.itemFillArgb(bg, false, 0.5f, 0.4f) ushr 24)
+        assertEquals(bg, WindowLogic.itemFillArgb(bg, false, 0.5f, 0f))
+    }
 }

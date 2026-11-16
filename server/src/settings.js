@@ -33,12 +33,21 @@ export const DEFAULTS = {
 	smb_username: '',
 	smb_password: '',
 	smb_domain: '',
+	// Backups of the database to an SMB share (its own share settings).
+	backup_times: '', // times of day; empty: only when started by hand
+	backup_keep: '14', // newest backups kept on the share
+	backup_smb_share: '',
+	backup_smb_folder: 'Devotion backups',
+	backup_smb_username: '',
+	backup_smb_password: '',
+	backup_smb_domain: '',
+	backup_last_slot: '', // the scheduled backup last done (managed by the server)
 };
 
 // Never sent back to the browser; the admin page only learns whether they are set.
-export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password']);
+export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password', 'backup_smb_password']);
 // Managed by the server itself, not by the settings form.
-const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot']);
+const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot', 'backup_last_slot']);
 
 export class Settings {
 	constructor(db, env = process.env) {
@@ -66,7 +75,7 @@ export class Settings {
 	publicView() {
 		const out = {};
 		for (const key of Object.keys(DEFAULTS)) {
-			if (key === 'last_check_slot') continue; // the server's own record, not a setting
+			if (key === 'last_check_slot' || key === 'backup_last_slot') continue; // the server's own record, not a setting
 			if (SECRET_KEYS.has(key)) out[key + '_set'] = this.get(key) !== '';
 			else out[key] = this.get(key);
 		}
@@ -85,13 +94,19 @@ export class Settings {
 				if (times) this.set(key, times.join(', '));
 				continue;
 			}
+			if (key === 'backup_times') {
+				const times = v === '' ? [] : parseTimes(v);
+				if (times) this.set(key, times.join(', '));
+				continue;
+			}
+			if (key === 'backup_keep' && !/^[1-9]\d{0,2}$/.test(v)) continue;
 			if (key === 'timezone' && !validTimeZone(v)) continue;
 			if (key === 'tts_provider' && !['piper', 'openai', 'none'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;
 			if (key === 'archive_days' && !/^[1-9]\d{0,3}$/.test(v)) continue;
 			// A share is //server/share; anything else would be handed to smbclient as options.
-			if (key === 'smb_share' && v !== '' && !/^\/\/[A-Za-z0-9._-]+\/[^\/\\"';|&<>`$\n]+$/.test(v.replace(/\\/g, '/'))) continue;
-			if (key === 'smb_share') { this.set(key, v.replace(/\\/g, '/')); continue; }
+			if ((key === 'smb_share' || key === 'backup_smb_share') && v !== '' && !/^\/\/[A-Za-z0-9._-]+\/[^\/\\"';|&<>`$\n]+$/.test(v.replace(/\\/g, '/'))) continue;
+			if (key === 'smb_share' || key === 'backup_smb_share') { this.set(key, v.replace(/\\/g, '/')); continue; }
 			this.set(key, v);
 		}
 	}
