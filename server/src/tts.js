@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { currentPlan } from './resources.js';
 
 export class TtsError extends Error {
 	constructor(message) {
@@ -102,16 +103,32 @@ export function openaiVoiceId(voice) {
 }
 
 export class Tts {
-	constructor({ settings, audioDir, voices = null, fetchImpl = fetch, runImpl = run }) {
+	constructor({ settings, audioDir, voices = null, fetchImpl = fetch, runImpl = run, planImpl = currentPlan }) {
 		this.settings = settings;
 		this.voices = voices;
 		this.audioDir = audioDir;
 		this.fetch = fetchImpl;
 		this.run = runImpl;
-		// Every synthesis waits for the one before it: one voice engine at a time,
-		// whatever asked for it (a mail check, a new voice, "Redo audio"…).
-		this.queue = Promise.resolve();
-		this.waiting = 0;
+		// However many places ask for audio (a mail check, a new voice, "Redo
+		// audio"…), only as many voice engines run at once as the machine has
+		// room for; the rest wait their turn.
+		this.planImpl = planImpl;
+		this.active = 0;
+		this.waiters = [];
+	}
+
+	/** What this machine allows right now (re-read each time: a container can be resized while running). */
+	plan() {
+		return this.planImpl(this.provider());
+	}
+
+	/** How many syntheses may run at once. */
+	jobs() {
+		return Math.max(1, this.plan().audioJobs);
+	}
+
+	get waiting() {
+		return this.waiters.length;
 	}
 
 	provider() {
@@ -143,6 +160,8 @@ export class Tts {
 	notReady() {
 		const p = this.provider();
 		if (p === 'none') return 'Audio is turned off.';
+		const plan = this.plan();
+		if (plan.audioJobs === 0) return plan.note;
 		if (p === 'piper') return this.voiceList().length ? null : 'No piper voice model is configured.';
 		if (p === 'openai') return this.settings.get('tts_openai_key') ? null : 'No API key is set for the speech service.';
 		return `Unknown speech engine "${p}".`;
@@ -150,10 +169,16 @@ export class Tts {
 
 	/** Writes <audioDir>/<name>.mp3 in the given voice and returns { file, bytes, sha256 }. */
 	synthesize(name, text, voiceId = this.defaultVoiceId()) {
-		this.waiting++;
-		const job = this.queue.then(() => this.synthesizeNow(name, text, voiceId));
-		this.queue = job.catch(() => {}).finally(() => this.waiting--);
-		return job;
+		const start = () => {
+			this.active++;
+			return this.synthesizeNow(name, text, voiceId).finally(() => {
+				this.active--;
+				// The limit is read again here, so a resized container takes effect between files.
+				while (this.waiters.length && this.active < this.jobs()) this.waiters.shift()();
+			});
+		};
+		if (this.active < this.jobs()) return start();
+		return new Promise((resolve, reject) => this.waiters.push(() => start().then(resolve, reject)));
 	}
 
 	async synthesizeNow(name, text, voiceId) {

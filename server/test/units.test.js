@@ -106,3 +106,21 @@ test('verse references are pinned to where they stand in the text', () => {
 	assert.deepEqual(locateReferences('text', undefined), []);
 	assert.equal(ENTRY_SCHEMA.properties.entries.items.properties.references.items.properties.book.enum.length, 66);
 });
+
+import { plan as resourcePlan, detect } from '../src/resources.js';
+
+test('the audio plan follows the cores and memory the server has', () => {
+	const jobs = (cores, usableMb, provider) => resourcePlan({ cores, memoryMb: usableMb, usableMb }, provider).audioJobs;
+	assert.equal(jobs(1, 205), 0); // a 256 MB container: no room for the voice engine
+	assert.equal(jobs(1, 410), 1); // 512 MB
+	assert.equal(jobs(1, 819), 1); // 1 GB, one core: the core is the limit
+	assert.equal(jobs(2, 1638), 1); // two cores: still one, the other serves the pages
+	assert.equal(jobs(4, 819), 3); // four cores, 1 GB: cores allow 3 and so does memory
+	assert.equal(jobs(4, 600), 2); // four cores, less memory: memory is the limit
+	assert.equal(jobs(16, 16000), 4); // never more than four
+	assert.equal(jobs(1, 205, 'openai'), 2); // a speech service needs no memory here
+	assert.equal(jobs(8, 8000, 'none'), 0);
+	assert.match(resourcePlan({ cores: 1, memoryMb: 256, usableMb: 205 }).note, /at least 512 MB/);
+	const here = detect();
+	assert.ok(here.cores >= 1 && here.memoryMb > 0 && here.usableMb > 0 && here.usableMb <= here.memoryMb);
+});

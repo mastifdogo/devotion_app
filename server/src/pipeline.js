@@ -276,10 +276,16 @@ export class Pipeline {
 		}
 		this.audioProgress = todo.length ? { done: 0, total: todo.length } : null;
 		try {
-			for (const [entry, voiceId] of todo) {
-				if (await this.makeAudio(entry, voiceId)) made++;
-				this.audioProgress.done++;
-			}
+			// As many at once as the machine has room for (the speech engine enforces the limit too).
+			let next = 0;
+			const worker = async () => {
+				while (next < todo.length) {
+					const [entry, voiceId] = todo[next++];
+					if (await this.makeAudio(entry, voiceId)) made++;
+					this.audioProgress.done++;
+				}
+			};
+			await Promise.all(Array.from({ length: Math.min(this.tts.jobs?.() ?? 1, todo.length) }, worker));
 		} finally {
 			this.audioProgress = null;
 		}

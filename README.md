@@ -95,6 +95,17 @@ connection after 7 days and the admin page will ask you to reconnect. Press
 *Publish app* on the consent screen to make it permanent; for a client only
 you use, no review is needed.
 
+### How much of the container it uses
+
+Nothing to configure: the server reads the container's CPU cores and memory
+while it runs and fits the audio work to them. The voice engine needs about
+220 MB per run, so a 512 MB container makes audio one entry at a time, a
+larger one with several cores up to four at once (one core is left for the
+pages and the app), and below about 400 MB no audio is made and the Status
+tab says why. Resize the container (`pct set <ctid> -memory 2048 -cores 4`)
+and the server adjusts by itself, without a restart. The Status tab shows
+what it found and what it is doing.
+
 ### When the mail is checked
 
 On the **Gmail** tab, *Check for new mail at* takes one or more times of day

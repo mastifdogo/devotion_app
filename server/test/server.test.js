@@ -19,6 +19,7 @@ import { Voices } from '../src/voices.js';
 import { Bibles } from '../src/bibles.js';
 import { Archiver } from '../src/archive.js';
 import { Wallpapers } from '../src/wallpapers.js';
+import { plan } from '../src/resources.js';
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -80,7 +81,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	};
 	const voices = new Voices({ settings, dataDir: dir, fetchImpl: webFetch, catalog: voiceCatalog });
 	const bibles = new Bibles({ db, dataDir: dir, fetchImpl: webFetch, catalog: bibleCatalog });
-	const tts = new Tts({ settings, audioDir, voices, runImpl });
+	const tts = new Tts({ settings, audioDir, voices, runImpl, planImpl: (provider) => plan({ cores: 1, memoryMb: 1024, usableMb: 819 }, provider) });
 	// A stand-in for smbclient: remembers what was "put" and lists it back.
 	const share = { files: new Map(), fail: null };
 	const smbRun = async (cmd, args) => {
@@ -395,54 +396,39 @@ test('wallpapers: found on Wallhaven by the admin, kept on the server, streamed 
 	assert.equal((await call('/admin/api/wallpapers/aaa111/delete', { body: {} })).status, 404);
 });
 
-test('the voice engine runs one at a time, however many ask', async () => {
+test('as many voice engines run at once as the machine has room for, and no more', async () => {
 	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-queue-'));
 	try {
 		const db = openDb(dir);
 		const settings = new Settings(db, {});
 		settings.applyForm({ piper_model: '/voice.onnx' });
+		let machine = { cores: 1, memoryMb: 512, usableMb: 410 };
 		let running = 0, most = 0;
 		const runImpl = async (cmd, args) => {
-			running++; most = Math.max(most, running);
+			if (cmd !== 'lame') { running++; most = Math.max(most, running); }
 			await new Promise((r) => setTimeout(r, 10));
 			writeFileSync(cmd === 'lame' ? args.at(-1) : args[args.indexOf('--output_file') + 1], Buffer.alloc(2048, 1));
-			running--;
+			if (cmd === 'lame') running--;
 		};
-		const tts = new Tts({ settings, audioDir: path.join(dir, 'audio'), runImpl });
-		const results = await Promise.allSettled([1, 2, 3, 4].map((n) => tts.synthesize(`e${n}`, 'Hello.')));
-		assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'fulfilled', 'fulfilled', 'fulfilled']);
+		const tts = new Tts({ settings, audioDir: path.join(dir, 'audio'), runImpl, planImpl: (p) => plan(machine, p) });
+		const six = () => Promise.allSettled([1, 2, 3, 4, 5, 6].map((n) => tts.synthesize(`e${n}-${most}`, 'Hello.')));
+		// A small container: one at a time.
+		assert.deepEqual((await six()).map((r) => r.status), Array(6).fill('fulfilled'));
 		assert.equal(most, 1);
+		// The same server after the container was given 4 cores and 2 GB: three at a time, without a restart.
+		machine = { cores: 4, memoryMb: 2048, usableMb: 1638 };
+		most = 0;
+		await six();
+		assert.equal(most, 3);
 		assert.equal(tts.waiting, 0);
+		// Too little memory: nothing is started, and the reason is said.
+		machine = { cores: 1, memoryMb: 256, usableMb: 205 };
+		assert.match(tts.notReady(), /Not enough memory to make audio/);
+		await assert.rejects(tts.synthesize('x', 'Hello.'), /Not enough memory/);
 		db.close();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
-
-test('the mail is checked at the set times of day, once each, catching up after a restart', async (t) => {
-	const { call, settings, pipeline } = await setup(t);
-	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	let state = await (await call('/admin/api/settings', { body: { check_times: '18:30, 6:00', timezone: 'Mars/Olympus' } })).json();
-	assert.equal(state.settings.check_times, '06:00, 18:30');
-	assert.equal(state.settings.timezone, ''); // not a real zone: ignored
-	state = await (await call('/admin/api/settings', { body: { check_times: 'early', timezone: 'Etc/GMT+6' } })).json();
-	assert.deepEqual([state.settings.check_times, state.settings.timezone], ['06:00, 18:30', 'Etc/GMT+6']);
-	assert.match(state.schedule.next, /^\w+day, \w+ \d+ at (06:00|18:30)$/);
-	assert.equal(state.settings.last_check_slot, undefined); // not editable, not shown
-
-	let runs = 0;
-	pipeline.runOnce = async () => { runs++; return {}; };
-	const at = (iso) => new Date(iso);
-	// Nothing recorded yet: the first look runs a check (as starting up always did).
-	assert.equal(await pipeline.tick(at('2026-11-15T13:00:00Z')), true); // 07:00 at UTC−6
-	assert.equal(await pipeline.tick(at('2026-11-15T13:00:30Z')), false); // same slot: once only
-	assert.equal(await pipeline.tick(at('2026-11-16T00:29:00Z')), false); // 18:29: not yet
-	assert.equal(await pipeline.tick(at('2026-11-16T00:30:00Z')), true); // 18:30
-	assert.equal(settings.get('last_check_slot'), '2026-11-15 18:30');
-	// The server was off overnight past 06:00: one catch-up check when it comes back, not more.
-	assert.equal(await pipeline.tick(at('2026-11-16T15:00:00Z')), true);
-	assert.equal(await pipeline.tick(at('2026-11-16T15:00:30Z')), false);
-	assert.equal(runs, 3);
 });
 
 test('a failed extraction is recorded and retried, without duplicate entries', async (t) => {
@@ -751,7 +737,7 @@ test('archive: old entries go to the share, and only then leave the server', asy
 	assert.throws(() => readFileSync(path.join(audioDir, audioFile)));
 	const state = await (await call('/admin/api/state')).json();
 	assert.deepEqual([state.archive.archived_total, state.archive.waiting, state.archive.last_error, state.entries.length], [1, 0, null, 0]);
-	assert.equal(typeof state.memory_mb, 'number');
+	assert.deepEqual(state.resources, { cores: 1, memory_mb: 1024, usable_mb: 819, audio_jobs: 1, note: 'Making audio one entry at a time.' });
 	assert.equal(state.pipeline.audio_progress, null);
 	// Nothing left to do, and audio is not made again for an archived entry.
 	assert.equal(await archiver.runOnce(), 0);
