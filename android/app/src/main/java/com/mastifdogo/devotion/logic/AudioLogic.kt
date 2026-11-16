@@ -99,8 +99,18 @@ object AudioLogic {
         val all = variants(entry)
         if (all.isEmpty()) return null
         if (entry.audio == null) return all.first().voice
+        preferredVoice(entry)?.let { return it }
         if (settingsVoice == null) return defaultVariant(entry)?.voice
         return all.firstOrNull { it.voice == settingsVoice }?.voice
+    }
+
+    /**
+     * The entry's own voice (preferred_voice), when it is set and the entry really has audio in
+     * it; such an entry is downloaded and played in that voice whatever Settings says.
+     */
+    fun preferredVoice(entry: Entry): String? {
+        val wanted = entry.preferredVoice?.takeIf { it.isNotEmpty() } ?: return null
+        return variants(entry).firstOrNull { it.voice == wanted }?.voice
     }
 
     /**
@@ -112,7 +122,8 @@ object AudioLogic {
         if (entry.archived) {
             val cached = playableVariants(entry, cachedFiles)
             if (cached.isEmpty()) return PlayerOffer.NoAudio
-            val same = cached.firstOrNull { it.voice == settingsVoice }
+            val wanted = preferredVoice(entry) ?: settingsVoice
+            val same = cached.firstOrNull { it.voice == wanted } ?: cached.firstOrNull { it.voice == settingsVoice }
             if (same != null) return PlayerOffer.Play(same.voice, otherVoice = false)
             val voice = cached.first().voice
             return PlayerOffer.Play(voice, otherVoice = settingsVoice != null && voice != settingsVoice && voice.isNotEmpty())

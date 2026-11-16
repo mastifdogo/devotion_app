@@ -19,7 +19,12 @@ data class ServerWallpaper(
     val sha256: String?,
     /** The wallhaven.cc page, for attribution. */
     val sourceUrl: String?,
+    /** All of its colours as ARGB, most dominant first (for "is it a dark wallpaper?"). */
+    val colors: List<Int> = emptyList(),
 )
+
+/** The part of an image shown on the screen, in image pixels. */
+data class CropRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 /** The answer of GET /api/wallpapers. */
 data class WallpaperLibrary(val topics: List<WallTopic>, val wallpapers: List<ServerWallpaper>)
@@ -76,6 +81,7 @@ object WallpaperLogic {
                     bytes = w.bytes?.takeIf { it > 0 },
                     sha256 = w.sha256?.trim()?.takeIf { it.isNotEmpty() },
                     sourceUrl = w.sourceUrl?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") },
+                    colors = (w.colors ?: emptyList()).mapNotNull { parseColor(it) },
                 )
             }
             .distinctBy { it.id }
@@ -115,11 +121,78 @@ object WallpaperLogic {
      * A random wallpaper from [topicId] (null, or a topic the server no longer has, = all topics),
      * never [currentId] when there are at least two to choose from. Null when there is none.
      */
-    fun pickRandom(library: WallpaperLibrary, topicId: String?, currentId: String?, random: Random): ServerWallpaper? {
-        val candidates = filter(library, validTopic(library, topicId))
+    fun pickRandom(
+        library: WallpaperLibrary,
+        topicId: String?,
+        currentId: String?,
+        random: Random,
+        darkOnly: Boolean = false,
+    ): ServerWallpaper? {
+        val inTopic = filter(library, validTopic(library, topicId))
+        // In the evening: only dark wallpapers, unless there are none.
+        val dark = if (darkOnly) inTopic.filter { isDark(it) } else emptyList()
+        val candidates = if (dark.isNotEmpty()) dark else inTopic
         if (candidates.isEmpty()) return null
         val choices = if (candidates.size >= 2) candidates.filter { it.id != currentId } else candidates
         return choices[random.nextInt(choices.size)]
+    }
+
+    /** Mean relative luminance below this counts as a dark wallpaper. */
+    const val DARK_LUMINANCE = 0.25
+
+    /** WCAG relative luminance (0 = black, 1 = white) of an ARGB colour. */
+    fun relativeLuminance(argb: Int): Double {
+        fun linear(channel: Int): Double {
+            val c = channel / 255.0
+            return if (c <= 0.04045) c / 12.92 else Math.pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear((argb shr 16) and 0xFF) + 0.7152 * linear((argb shr 8) and 0xFF) + 0.0722 * linear(argb and 0xFF)
+    }
+
+    /**
+     * Mean luminance of a wallpaper's colours, the first (most dominant) weighing most
+     * (weights n, n-1, … 1); null when it has no colours.
+     */
+    fun meanLuminance(colors: List<Int>): Double? {
+        if (colors.isEmpty()) return null
+        var sum = 0.0
+        var weights = 0.0
+        for ((i, c) in colors.withIndex()) {
+            val weight = (colors.size - i).toDouble()
+            sum += relativeLuminance(c) * weight
+            weights += weight
+        }
+        return sum / weights
+    }
+
+    /** True when the wallpaper's colours are dark on average; unknown colours are not dark. */
+    fun isDark(wallpaper: ServerWallpaper): Boolean {
+        val mean = meanLuminance(wallpaper.colors) ?: return false
+        return mean < DARK_LUMINANCE
+    }
+
+    /** The bias (0 = left edge, 0.5 = centre, 1 = right edge) kept within 0..1; NaN gives the centre. */
+    fun clampBias(bias: Float): Float = if (bias.isNaN()) 0.5f else bias.coerceIn(0f, 1f)
+
+    /** Compose BiasAlignment's horizontal bias (-1..1) for a crop bias of 0..1. */
+    fun alignmentBias(bias: Float): Float = clampBias(bias) * 2f - 1f
+
+    /**
+     * The part of an image of [imageWidth] x [imageHeight] shown when it is scaled to fill a
+     * screen of [screenWidth] x [screenHeight] (like ContentScale.Crop). An image wider than the
+     * screen keeps its full height and is cut horizontally at [bias]; a taller one keeps its full
+     * width and is centred vertically.
+     */
+    fun cropRect(imageWidth: Int, imageHeight: Int, screenWidth: Int, screenHeight: Int, bias: Float): CropRect {
+        if (imageWidth <= 0 || imageHeight <= 0 || screenWidth <= 0 || screenHeight <= 0) {
+            return CropRect(0f, 0f, imageWidth.coerceAtLeast(0).toFloat(), imageHeight.coerceAtLeast(0).toFloat())
+        }
+        val scale = maxOf(screenWidth.toFloat() / imageWidth, screenHeight.toFloat() / imageHeight)
+        val visibleWidth = (screenWidth / scale).coerceAtMost(imageWidth.toFloat())
+        val visibleHeight = (screenHeight / scale).coerceAtMost(imageHeight.toFloat())
+        val left = (imageWidth - visibleWidth) * clampBias(bias)
+        val top = (imageHeight - visibleHeight) / 2f
+        return CropRect(left, top, left + visibleWidth, top + visibleHeight)
     }
 
     /** The server's topics as stored for the Settings chips: one "id<TAB>name" per line. */

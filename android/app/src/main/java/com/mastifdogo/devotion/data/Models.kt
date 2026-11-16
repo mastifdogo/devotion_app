@@ -43,6 +43,13 @@ data class Entry(
     val kind: String = "devotion",
     /** A lesson's number, or for a daily reading the lesson that week's reading belongs to. */
     @SerialName("lesson_number") val lessonNumber: Int? = null,
+    /**
+     * When set and present in [audio], this entry is downloaded and played in this voice instead
+     * of the one chosen in Settings (a premium voice made only for lessons).
+     */
+    @SerialName("preferred_voice") val preferredVoice: String? = null,
+    /** Characters the narrator speaks before the body starts (lesson number/date, title, scripture). */
+    @SerialName("speech_offset") val speechOffset: Int? = null,
 ) {
     /** "yyyy-MM-dd"-like key used for ordering: entry_date, falling back to created_at. */
     val sortKey: String
@@ -63,6 +70,8 @@ data class Voice(
     val id: String,
     val name: String = "",
     val description: String? = null,
+    /** Made only for lessons: not offered in the Settings voice chooser. */
+    @SerialName("lessons_only") val lessonsOnly: Boolean = false,
 )
 
 @Serializable
