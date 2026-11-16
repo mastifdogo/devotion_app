@@ -8,6 +8,18 @@ enum class ScrollMode(val label: String) {
     AUTO("Auto scroll"),
 }
 
+/**
+ * What the entry's audio bar shows (for an entry that has audio). Playing: the progress slider and
+ * times, and one row with the voice, Follow and the playback speed. Not playing (paused, stopped,
+ * never started): only the "− Auto scroll +" row above the play button with the voice name.
+ */
+data class AudioBarParts(
+    val autoScrollRow: Boolean,
+    val followButton: Boolean,
+    val speedControl: Boolean,
+    val progress: Boolean,
+)
+
 /** Whole pixels to scroll now, and the sub-pixel rest to carry into the next frame. */
 data class ScrollStep(val pixels: Int, val carry: Float)
 
@@ -22,6 +34,15 @@ object FollowLogic {
 
     /** Frames longer than this (a pause, a dropped frame) count as this long, so nothing jumps. */
     const val MAX_FRAME_SECONDS = 0.1f
+
+    /** The parts of the audio bar for an entry with audio; see [AudioBarParts]. */
+    fun audioBarParts(playingHere: Boolean): AudioBarParts =
+        AudioBarParts(
+            autoScrollRow = !playingHere,
+            followButton = playingHere,
+            speedControl = playingHere,
+            progress = playingHere,
+        )
 
     /** Follow while this entry's audio is playing, auto scroll otherwise (paused, stopped, no audio). */
     fun modeFor(playingHere: Boolean): ScrollMode = if (playingHere) ScrollMode.FOLLOW else ScrollMode.AUTO

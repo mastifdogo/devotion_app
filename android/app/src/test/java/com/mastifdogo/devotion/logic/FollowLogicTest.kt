@@ -66,6 +66,20 @@ class FollowLogicTest {
     }
 
     @Test
+    fun audioBarParts_dependOnWhetherThisEntryIsPlaying() {
+        // Playing: progress, and voice + Follow + speed on one row; no auto-scroll row.
+        assertEquals(
+            AudioBarParts(autoScrollRow = false, followButton = true, speedControl = true, progress = true),
+            FollowLogic.audioBarParts(playingHere = true),
+        )
+        // Paused, stopped or never started: just the auto-scroll row above the play button.
+        assertEquals(
+            AudioBarParts(autoScrollRow = true, followButton = false, speedControl = false, progress = false),
+            FollowLogic.audioBarParts(playingHere = false),
+        )
+    }
+
+    @Test
     fun autoSpeedSteps() {
         assertEquals(22, FollowLogic.DEFAULT_AUTO_SPEED)
         assertTrue(FollowLogic.DEFAULT_AUTO_SPEED in FollowLogic.AUTO_SPEEDS)

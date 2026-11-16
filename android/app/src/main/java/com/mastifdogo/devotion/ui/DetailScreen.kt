@@ -2,6 +2,7 @@ package com.mastifdogo.devotion.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -537,6 +539,8 @@ private fun PlayerBar(
             modifier = Modifier
                 .then(if (inWindow) Modifier else Modifier.navigationBarsPadding())
                 .fillMaxWidth()
+                // The bar is taller while playing: grow and shrink smoothly instead of jumping.
+                .animateContentSize()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             val audioError = vm.audioError
@@ -566,32 +570,36 @@ private fun PlayerBar(
                 return@Column
             }
             val voice = offer.voice
+            // Kept audio of an archived entry in another voice is labelled as such.
+            val voiceText = if (offer.otherVoice) "Voice: ${vm.voiceLabel(voice)}" else vm.voiceLabel(voice)
+            val parts = FollowLogic.audioBarParts(playingHere = mode == ScrollMode.FOLLOW)
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (voice.isNotEmpty()) {
-                    Text(
-                        // Kept audio of an archived entry in another voice is labelled as such.
-                        text = if (offer.otherVoice) "Voice: ${vm.voiceLabel(voice)}" else vm.voiceLabel(voice),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Spacer(modifier = Modifier.size(1.dp))
-                }
-                // Between the voice and the speed, while playing: scroll along with the narration.
-                if (mode == ScrollMode.FOLLOW) {
-                    ScrollToggle(vm, ScrollMode.FOLLOW.label, selected = following, onClick = onToggleFollow)
-                }
-                SpeedControl(vm)
-            }
-            // Not playing: the same button is "Auto scroll" with its own − / +, on a row of its own
-            // (it does not fit beside the playback speed on a phone).
-            if (mode == ScrollMode.AUTO) {
+            if (parts.autoScrollRow) {
+                // Not playing: "− Auto scroll +" on top, then the play button with the voice name.
+                // No playback speed and no progress until it plays.
                 AutoScrollControl(vm, selected = autoScrolling, onClick = onToggleAuto)
+            }
+            if (parts.followButton || parts.speedControl) {
+                // Playing: the voice, Follow and the playback speed on one row.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (voice.isNotEmpty()) {
+                        Text(
+                            text = voiceText,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.size(1.dp))
+                    }
+                    if (parts.followButton) {
+                        ScrollToggle(vm, ScrollMode.FOLLOW.label, selected = following, onClick = onToggleFollow)
+                    }
+                    if (parts.speedControl) SpeedControl(vm)
+                }
             }
 
             if (vm.isAudioDownloading(entry)) {
@@ -615,9 +623,29 @@ private fun PlayerBar(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-            } else {
+            } else if (parts.progress) {
                 val loaded = vm.playerEntryId == entry.id && vm.playerVoice == voice
                 PlayerControls(vm = vm, entry = entry, loaded = loaded, cached = vm.isAudioCached(entry))
+            } else {
+                // Not playing: just the play button and the voice name.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(onClick = { vm.playPause(entry) }) {
+                        Text(if (vm.isAudioCached(entry)) "Play" else "Download & play")
+                    }
+                    if (voice.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = voiceText,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
       }
