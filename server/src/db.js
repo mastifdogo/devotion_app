@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS profiles (
 	name_key TEXT NOT NULL UNIQUE,   -- lower-cased, so "Maria" and "maria" are one person
 	created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS profile_bibles (
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	bible_id TEXT NOT NULL,          -- a version this person has downloaded in the app
+	PRIMARY KEY (profile_id, bible_id)
+);
 CREATE TABLE IF NOT EXISTS annotations (
 	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
 	id TEXT NOT NULL,                -- made by the app (a UUID)

@@ -296,6 +296,32 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		send(res, 200, { annotations: rows.map(annotationJson), server_time: serverTime });
 	});
 
+	// The Bible versions a person has downloaded in the app, so the website can offer the same ones.
+	route('GET', /^\/api\/profiles\/(\d+)\/bibles$/, (req, res, m) => {
+		const profile = requireProfile(m[1]);
+		send(res, 200, { bibles: db.prepare('SELECT bible_id FROM profile_bibles WHERE profile_id = ? ORDER BY bible_id').all(profile.id).map((r) => r.bible_id) });
+	});
+
+	route('PUT', /^\/api\/profiles\/(\d+)\/bibles$/, async (req, res, m) => {
+		const profile = requireProfile(m[1]);
+		const body = await readJson(req);
+		if (!Array.isArray(body.bibles) || body.bibles.length > 100 || !body.bibles.every((b) => typeof b === 'string' && /^[a-z0-9]{1,20}$/.test(b))) {
+			throw new HttpError(400, '"bibles" must be a list of version ids.');
+		}
+		const ids = [...new Set(body.bibles)];
+		db.exec('BEGIN');
+		try {
+			db.prepare('DELETE FROM profile_bibles WHERE profile_id = ?').run(profile.id);
+			const add = db.prepare('INSERT INTO profile_bibles (profile_id, bible_id) VALUES (?, ?)');
+			for (const id of ids) add.run(profile.id, id);
+			db.exec('COMMIT');
+		} catch (err) {
+			db.exec('ROLLBACK');
+			throw err;
+		}
+		send(res, 200, { bibles: ids.sort() });
+	});
+
 	route('PUT', /^\/api\/profiles\/(\d+)\/annotations\/([^/]+)$/, async (req, res, m) => {
 		const profile = requireProfile(m[1]);
 		const incoming = parseAnnotation(m[2], await readJson(req));
@@ -516,6 +542,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		requireAdmin(req);
 		await readJson(req);
 		db.prepare('DELETE FROM annotations WHERE profile_id = ?').run(Number(m[1]));
+		db.prepare('DELETE FROM profile_bibles WHERE profile_id = ?').run(Number(m[1]));
 		db.prepare('DELETE FROM profiles WHERE id = ?').run(Number(m[1]));
 		send(res, 200, await adminState());
 	});

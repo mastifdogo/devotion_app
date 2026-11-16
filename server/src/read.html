@@ -5,43 +5,48 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Devotion</title>
 <script>
-// Before the page paints: the theme, the wallpaper and the window opacity this browser chose.
+// Before the page paints: this browser's theme, wallpaper and opacities.
 try {
 	const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
 	const w = localStorage.getItem('read.wallpaper'); if (w && /^[A-Za-z0-9]{1,16}$/.test(w)) document.documentElement.dataset.wallpaper = w;
 	const o = Number(localStorage.getItem('read.opacity')); if (o >= 50 && o <= 100) document.documentElement.style.setProperty('--win', o / 100);
+	const i = localStorage.getItem('read.itemOpacity'); if (i !== null && Number(i) >= 0 && Number(i) <= 100) document.documentElement.style.setProperty('--item', Number(i) / 100);
 } catch {}
 </script>
 <style>
-:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --raised:#faf8f4; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --win:1; }
-:root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; } }
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --raised:#faf8f4; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --mark:#f6e7a8; --win:1; --item:1; }
+:root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; } }
 * { box-sizing: border-box; }
 html { background:var(--bg); }
 body { margin:0; min-height:100vh; color:var(--ink); font:16px/1.6 system-ui, sans-serif; background:var(--bg) center / cover no-repeat fixed; }
+button, input, select { font:inherit; color:inherit; }
 
 /* Windows: the text sits on these; with a wallpaper, it shows around them. */
 .window { background:color-mix(in srgb, var(--card) calc(var(--win) * 100%), transparent); border:1px solid var(--line); border-radius:16px; }
 :root:not([data-wallpaper]) .window { border-color:transparent; background:var(--bg); border-radius:0; }
 :root[data-wallpaper] .window { box-shadow:0 8px 32px rgba(0,0,0,.18); -webkit-backdrop-filter:blur(calc((1 - var(--win)) * 24px)); backdrop-filter:blur(calc((1 - var(--win)) * 24px)); }
+/* Items inside a window (list entries, Bible books and chapters) have their own opacity. */
+.item, .cell { background:color-mix(in srgb, var(--raised) calc(var(--item) * 100%), transparent); border:1px solid var(--line); border-radius:10px; color:var(--ink); }
 
 .shell { max-width:44rem; margin:0 auto; padding:0 1rem 2rem; }
 :root[data-wallpaper] .shell { padding:12px 12px 24px; }
-.top { padding:.8rem 1rem 0; margin-bottom:12px; }
-:root:not([data-wallpaper]) .top { position:sticky; top:0; z-index:2; border-bottom:1px solid var(--line); padding:.8rem 0 0; }
-.bar { display:flex; align-items:center; gap:.9rem; flex-wrap:wrap; }
+.top { padding:.7rem 1rem 0; margin-bottom:12px; }
+:root:not([data-wallpaper]) .top { position:sticky; top:0; z-index:2; border-bottom:1px solid var(--line); padding:.7rem 0 0; }
+.bar { display:flex; align-items:center; gap:.4rem; }
 .bar h1 { font-size:1.25rem; margin:0; flex:1; }
-.bar a, .bar button { color:var(--accent); text-decoration:none; background:none; border:0; font:inherit; font-size:.9rem; cursor:pointer; padding:.3rem 0; }
-.tabs { display:flex; gap:1.4rem; margin-top:.4rem; }
-@media (max-width: 520px) { .bar { gap:.7rem; } .bar .prefix { display:none; } }
-.tabs button { background:none; border:0; border-bottom:3px solid transparent; padding:.5rem 0; font:inherit; font-weight:600; color:var(--muted); cursor:pointer; }
+.icon { display:inline-grid; place-items:center; width:2.2rem; height:2.2rem; border-radius:50%; color:var(--ink); background:none; border:0; cursor:pointer; text-decoration:none; }
+.icon:hover { background:color-mix(in srgb, var(--ink) 8%, transparent); }
+.icon svg { width:1.3rem; height:1.3rem; }
+.tabs { display:flex; gap:1.4rem; margin-top:.2rem; }
+.tabs button { background:none; border:0; border-bottom:3px solid transparent; padding:.5rem 0; font-weight:600; color:var(--muted); cursor:pointer; }
 .tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); }
 .pane { padding:1rem; }
 :root:not([data-wallpaper]) .pane { padding:0; }
-#entry-pane:empty { display:none; }
+#right:empty { display:none; }
 
-.item { display:block; width:100%; text-align:left; background:var(--raised); border:1px solid var(--line); border-radius:10px; padding:.8rem .9rem; margin:0 0 .6rem; color:var(--ink); text-decoration:none; }
-.item:hover, .item[aria-current="true"] { border-color:var(--accent); }
+.item { display:block; width:100%; text-align:left; padding:.8rem .9rem; margin:0 0 .6rem; text-decoration:none; cursor:pointer; }
+.item:hover, .item[aria-current="true"], .cell:hover, .cell[aria-current="true"] { border-color:var(--accent); }
 .label { font-size:.8rem; font-weight:600; color:var(--accent); }
 .title { font-weight:600; font-size:1.05rem; margin:.1rem 0; }
 .muted { color:var(--muted); } .small { font-size:.85rem; }
@@ -51,67 +56,106 @@ article h2 { font-size:1.6rem; line-height:1.25; margin:.2rem 0 .3rem; }
 .card { background:var(--raised); border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; margin:1rem 0; }
 .player { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
 .player audio { width:100%; }
-select, input[type=range] { font:inherit; font-size:.85rem; accent-color:var(--accent); }
-select { padding:.25rem .4rem; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+select { padding:.25rem .4rem; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
 .body p { margin:0 0 1em; }
 .body p.head { font-weight:600; margin-top:1.4em; }
+.body a, .ref { color:var(--accent); text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .empty { text-align:center; color:var(--muted); padding:3rem 0; }
-.back { color:var(--accent); font-size:.9rem; text-decoration:none; }
+.back { color:var(--accent); font-size:.9rem; text-decoration:none; background:none; border:0; padding:0; cursor:pointer; }
 
-/* Desktop: the list on the left, the open entry on the right. */
-@media (min-width: 960px) {
-	.shell { max-width:76rem; padding:0 2rem 2rem; }
-	:root[data-wallpaper] .shell { padding:24px 32px 32px; }
-	.columns { display:grid; grid-template-columns:minmax(20rem, 26rem) 1fr; gap:24px; align-items:start; }
-	:root:not([data-wallpaper]) .columns { gap:2rem; }
-	#list-pane { position:sticky; top:calc(var(--top-h, 7rem) + 12px); max-height:calc(100vh - var(--top-h, 7rem) - 48px); overflow:auto; }
-	#entry-pane:empty { display:block; }
-	#entry-pane:empty::before { content:'Choose a reading on the left.'; display:block; color:var(--muted); text-align:center; padding:4rem 0; }
-	.back { display:none; }
-	article { max-width:42rem; margin:0 auto; font-size:1.05rem; }
-	:root:not([data-wallpaper]) #entry-pane { border-left:1px solid var(--line); padding-left:2rem; }
-}
-@media (max-width: 959px) { body.reading #list-pane { display:none; } }
+/* Bible */
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(3.2rem, 1fr)); gap:.4rem; }
+.cell { padding:.45rem 0; text-align:center; cursor:pointer; font-size:.95rem; text-decoration:none; display:block; }
+.books { display:grid; grid-template-columns:repeat(auto-fill, minmax(9.5rem, 1fr)); gap:.4rem; }
+.books .cell { text-align:left; padding:.45rem .7rem; }
+.verses p { margin:0 0 .5em; }
+.verses sup { color:var(--muted); font-size:.7em; margin-right:.25em; }
+.verses .hit { background:var(--mark); border-radius:4px; box-shadow:0 0 0 3px var(--mark); }
+.chapnav { display:flex; justify-content:space-between; gap:.5rem; margin-top:1rem; }
+.chapnav button { background:none; border:1px solid var(--line); border-radius:8px; padding:.35rem .8rem; cursor:pointer; color:var(--accent); }
+.chapnav button:disabled { opacity:.4; cursor:default; }
 
-/* Appearance */
-dialog { border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--ink); width:min(40rem, calc(100vw - 2rem)); padding:1rem 1.1rem; }
-dialog::backdrop { background:rgba(0,0,0,.45); }
-dialog h2 { font-size:1.1rem; margin:0 0 .6rem; }
-.chips { display:flex; gap:.4rem; flex-wrap:wrap; margin:.4rem 0 .6rem; }
-.chip { padding:.2rem .7rem; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--ink); font:inherit; font-size:.85rem; cursor:pointer; }
+/* Settings page */
+.settings h2 { font-size:1.4rem; margin:.3rem 0 1rem; }
+.settings h3 { font-size:1rem; margin:1.4rem 0 .5rem; }
+.choices { display:flex; gap:.4rem; flex-wrap:wrap; }
+.chip { padding:.25rem .8rem; border-radius:999px; border:1px solid var(--line); background:transparent; cursor:pointer; font-size:.9rem; }
 .chip[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--card); }
-.walls { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:.5rem; max-height:16rem; overflow:auto; }
+.walls { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:.5rem; margin-top:.6rem; }
 .wall { aspect-ratio:9/16; border-radius:8px; overflow:hidden; border:2px solid transparent; padding:0; cursor:pointer; background:var(--line) center / cover; }
 .wall[aria-pressed="true"] { border-color:var(--accent); }
 .wall.none { display:grid; place-items:center; font-size:.8rem; color:var(--muted); background:var(--bg); border:1px dashed var(--line); }
-.slider { display:flex; align-items:center; gap:.7rem; margin-top:1rem; }
-.slider input { flex:1; }
-.row { display:flex; justify-content:flex-end; gap:.5rem; margin-top:1rem; }
-.row button { font:inherit; padding:.4rem .9rem; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:var(--card); cursor:pointer; }
+.slider { display:flex; align-items:center; gap:.7rem; margin-top:.6rem; }
+.slider input { flex:1; accent-color:var(--accent); }
+.slider span:first-child { min-width:10rem; }
+.slider .val { min-width:3rem; text-align:right; color:var(--muted); }
+
+/* Profile prompt */
+dialog { border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--ink); width:min(26rem, calc(100vw - 2rem)); padding:1.2rem; }
+dialog::backdrop { background:rgba(0,0,0,.45); }
+dialog h2 { margin:0 0 .3rem; font-size:1.2rem; }
+dialog input[type=text] { width:100%; padding:.55rem .7rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); margin:.6rem 0; }
+.btn { padding:.5rem 1rem; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:var(--card); cursor:pointer; }
+.btn.plain { background:transparent; color:var(--accent); }
+.who { display:flex; flex-direction:column; gap:.4rem; margin:.6rem 0; }
+.who button { text-align:left; }
+.err { color:#a23b3b; font-size:.85rem; min-height:1.2em; }
+
+/* Desktop: two windows side by side, each scrolling on its own. */
+@media (min-width: 960px) {
+	.shell { max-width:80rem; padding:0 2rem 1.5rem; }
+	:root[data-wallpaper] .shell { padding:24px 32px 24px; }
+	.columns { display:grid; grid-template-columns:minmax(20rem, 26rem) 1fr; gap:24px; align-items:start; }
+	:root:not([data-wallpaper]) .columns { gap:2rem; }
+	.columns > .pane { position:sticky; top:calc(var(--top-h, 7rem) + 12px); max-height:calc(100vh - var(--top-h, 7rem) - 36px); overflow:auto; overscroll-behavior:contain; }
+	#right:empty { display:block; }
+	#right:empty::before { content:attr(data-empty); display:block; color:var(--muted); text-align:center; padding:4rem 0; }
+	.columns.single { grid-template-columns:1fr; }
+	.back.narrow-only { display:none; }
+	article, .verses-wrap, .settings { max-width:42rem; margin:0 auto; }
+	article { font-size:1.05rem; }
+	:root:not([data-wallpaper]) #right { border-left:1px solid var(--line); padding-left:2rem; }
+}
+@media (max-width: 959px) { body.detail #left { display:none; } }
+.columns.single #left { display:none; }
 </style>
 </head>
 <body>
 <div class="shell">
 	<header class="top window" id="top">
-		<div class="bar"><h1>Devotion</h1><button id="appearance" type="button">Wallpaper</button><button id="theme" type="button"></button><a href="/">Home</a></div>
-		<div class="tabs" role="tablist">
+		<div class="bar">
+			<h1>Devotion</h1>
+			<a class="icon" href="#/settings" id="gear" title="Settings" aria-label="Settings">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+			</a>
+			<a class="icon" href="/" title="Home" aria-label="Home">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg>
+			</a>
+		</div>
+		<div class="tabs" role="tablist" id="tabs">
 			<button role="tab" data-tab="daily_reading">Daily readings</button>
 			<button role="tab" data-tab="lesson">Lessons</button>
+			<button role="tab" data-tab="bible">Bible</button>
 		</div>
 	</header>
-	<div class="columns">
-		<section class="pane window" id="list-pane" aria-label="Readings"></section>
-		<section class="pane window" id="entry-pane" aria-live="polite"></section>
+	<div class="columns" id="columns">
+		<section class="pane window" id="left" aria-label="List"></section>
+		<section class="pane window" id="right" aria-live="polite"></section>
 	</div>
 </div>
 
-<dialog id="look">
-	<h2>Wallpaper</h2>
-	<p class="small muted" id="look-note">Wallpapers from this server (from wallhaven.cc). Your choice is kept in this browser.</p>
-	<div class="chips" id="look-topics"></div>
-	<div class="walls" id="look-walls"></div>
-	<label class="slider small"><span>Text window opacity</span><input type="range" id="look-opacity" min="50" max="100" step="1"><span id="look-value"></span></label>
-	<div class="row"><button type="button" id="look-done">Done</button></div>
+<dialog id="who">
+	<h2>What's your name?</h2>
+	<p class="small muted">Your Bible versions from the app follow your name.</p>
+	<form id="who-form" method="dialog">
+		<input type="text" id="who-name" maxlength="60" autocomplete="name" placeholder="Your name">
+		<div class="err" id="who-err"></div>
+		<div class="who" id="who-list"></div>
+		<div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:.6rem">
+			<button type="button" class="btn plain" id="who-skip">Not now</button>
+			<button type="submit" class="btn">Continue</button>
+		</div>
+	</form>
 </dialog>
 
 <script>
@@ -119,9 +163,16 @@ const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
-let entries = [], voices = { voices: [], default: null }, tab = store.get('read.tab', 'daily_reading');
 const wide = window.matchMedia('(min-width: 960px)');
+const getJson = async (url, init) => { const r = await fetch(url, init); const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { status: r.status }); return j; };
 
+let entries = [], voices = { voices: [], default: null };
+let tab = store.get('read.tab', 'daily_reading');
+let profile = (() => { try { return JSON.parse(store.get('read.profile', 'null')); } catch { return null; } })();
+let serverBibles = [], profileBibles = [], bible = null; // bible: the version open, loaded in full
+let library = { topics: [], wallpapers: [] }, wallTopic = 'all';
+
+// --- Labels -------------------------------------------------------------------
 // Dates are written in the reader's own language; taken at noon UTC so no time zone moves them a day.
 const day = (iso, opts) => iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString(undefined, { timeZone: 'UTC', ...opts }) : '';
 const kindOf = (e) => (e.kind === 'lesson' ? 'lesson' : 'daily_reading');
@@ -131,76 +182,163 @@ function heading(e) {
 }
 const sortKey = (e) => (e.entry_date || e.created_at || '') + '|' + (e.created_at || '') + '|' + String(e.id).padStart(9, '0');
 
-// --- Theme ----------------------------------------------------------------------
-function renderTheme() {
-	const mode = { auto: 'System', light: 'Light', dark: 'Dark' }[root.dataset.theme || 'auto'];
-	$('theme').replaceChildren(el('span', 'Theme: ', 'prefix'), mode);
-	$('theme').title = 'Theme: ' + mode.toLowerCase();
+// --- Look: theme, wallpaper, opacities ----------------------------------------
+function setTheme(mode) {
+	if (mode === 'auto') delete root.dataset.theme; else root.dataset.theme = mode;
+	store.set('theme', mode === 'auto' ? null : mode);
 }
-$('theme').onclick = () => {
-	const next = { auto: 'light', light: 'dark', dark: 'auto' }[root.dataset.theme || 'auto'];
-	if (next === 'auto') delete root.dataset.theme; else root.dataset.theme = next;
-	store.set('theme', next === 'auto' ? null : next);
-	renderTheme();
-};
-
-// --- Wallpaper and window opacity -------------------------------------------------
-let library = { topics: [], wallpapers: [] }, lookTopic = 'all';
 function applyWallpaper() {
 	const id = root.dataset.wallpaper;
 	document.body.style.backgroundImage = id ? `url("/api/wallpapers/${encodeURIComponent(id)}")` : '';
-	$('appearance').textContent = id ? 'Wallpaper ✓' : 'Wallpaper';
 	measureTop();
 }
 function setWallpaper(id) {
 	if (id) root.dataset.wallpaper = id; else delete root.dataset.wallpaper;
 	store.set('read.wallpaper', id || null);
-	applyWallpaper(); renderLook();
+	applyWallpaper();
 }
-function setOpacity(pct) {
-	const v = Math.max(50, Math.min(100, Number(pct) || 100));
-	root.style.setProperty('--win', v / 100);
-	store.set('read.opacity', String(v));
-	$('look-opacity').value = v; $('look-value').textContent = v + '%';
+function setPercent(varName, key, pct, min) {
+	const v = Math.max(min, Math.min(100, Math.round(Number(pct))));
+	root.style.setProperty(varName, v / 100);
+	store.set(key, String(v));
+	return v;
 }
-function renderLook() {
-	const chips = $('look-topics'); chips.replaceChildren();
-	const all = [{ id: 'all', name: 'All', count: library.wallpapers.length }, ...library.topics];
-	if (!all.some((t) => t.id === lookTopic)) lookTopic = 'all';
-	for (const t of all) {
-		const b = el('button', `${t.name} ${t.count}`, 'chip'); b.type = 'button';
-		b.setAttribute('aria-pressed', String(t.id === lookTopic));
-		b.onclick = () => { lookTopic = t.id; renderLook(); };
-		chips.append(b);
-	}
-	const grid = $('look-walls'); grid.replaceChildren();
-	const none = el('button', 'None', 'wall none'); none.type = 'button';
-	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper)); none.onclick = () => setWallpaper(null);
-	grid.append(none);
-	for (const w of library.wallpapers.filter((w) => lookTopic === 'all' || w.topic === lookTopic)) {
-		const b = el('button', null, 'wall'); b.type = 'button';
-		b.style.backgroundColor = w.colors?.[0] || '';
-		b.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(w.id)}/thumb")`;
-		b.setAttribute('aria-label', `Wallpaper ${w.id}`);
-		b.setAttribute('aria-pressed', String(root.dataset.wallpaper === w.id));
-		b.onclick = () => setWallpaper(w.id);
-		grid.append(b);
-	}
-	$('look-note').textContent = library.wallpapers.length
-		? 'Wallpapers from this server (from wallhaven.cc). Your choice is kept in this browser.'
-		: 'This server has no wallpapers yet: they are added on its admin panel.';
-	$('look-opacity').disabled = !root.dataset.wallpaper;
+
+// --- Profile --------------------------------------------------------------------
+async function askProfile() {
+	const dlg = $('who');
+	$('who-err').textContent = ''; $('who-name').value = '';
+	const list = $('who-list'); list.replaceChildren();
+	try {
+		const { profiles } = await getJson('/api/profiles');
+		for (const p of profiles) {
+			const b = el('button', `Continue as ${p.name}`, 'btn plain'); b.type = 'button';
+			b.onclick = () => { useProfile(p); dlg.close(); };
+			list.append(b);
+		}
+	} catch {}
+	dlg.showModal(); $('who-name').focus();
 }
-$('appearance').onclick = async () => {
-	try { library = await (await fetch('/api/wallpapers')).json(); } catch { library = { topics: [], wallpapers: [] }; }
-	renderLook(); $('look').showModal();
+$('who-form').onsubmit = async (ev) => {
+	ev.preventDefault();
+	const name = $('who-name').value.trim();
+	if (!name) { $('who-err').textContent = 'Enter your name, or choose one below.'; return; }
+	try { useProfile(await getJson('/api/profiles', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) })); $('who').close(); }
+	catch (err) { $('who-err').textContent = err.message; }
 };
-$('look-done').onclick = () => $('look').close();
-$('look-opacity').oninput = (e) => setOpacity(e.target.value);
+$('who-skip').onclick = () => { store.set('read.askedProfile', '1'); $('who').close(); };
+function useProfile(p) {
+	profile = { id: p.id, name: p.name };
+	store.set('read.profile', JSON.stringify(profile));
+	loadProfileBibles().then(render);
+}
+async function loadProfileBibles() {
+	profileBibles = [];
+	if (!profile) return;
+	try { profileBibles = (await getJson(`/api/profiles/${profile.id}/bibles`)).bibles || []; }
+	catch (err) {
+		if (err.status === 404) {
+			// Older server, or the profile was removed on the admin panel: only the latter means "ask again".
+			try { const { profiles } = await getJson('/api/profiles'); if (!profiles.some((p) => p.id === profile.id)) { profile = null; store.set('read.profile', null); } } catch {}
+		}
+	}
+}
+// The versions this person has in the app, as far as this server still has them; all of the server's if none.
+function availableBibles() {
+	const mine = serverBibles.filter((b) => profileBibles.includes(b.id));
+	return { list: mine.length ? mine : serverBibles, mine: mine.length > 0 };
+}
+
+// --- Bible ------------------------------------------------------------------------
+async function openVersion(id) {
+	if (bible?.id === id) return bible;
+	$('right').replaceChildren(el('p', 'Loading the Bible…', 'empty'));
+	bible = await getJson(`/api/bibles/${encodeURIComponent(id)}`);
+	store.set('read.bible', id);
+	return bible;
+}
+const bibleHash = (v, b, c, vs, ve) => `#/bible/${encodeURIComponent(v)}/${b}/${c}` + (vs ? `/${vs}` + (ve ? `-${ve}` : '') : '');
+// A reference from an entry: book by its standard position when the version has the usual 66 books, else by name.
+function bookIndexFor(ref, version) {
+	if (version.books.length === 66 && ref.book_index >= 0 && ref.book_index < 66) return ref.book_index;
+	const want = String(ref.book || '').toLowerCase().replace(/^psalm$/, 'psalms');
+	const i = version.books.findIndex((b) => b.name.toLowerCase() === want);
+	return i >= 0 ? i : null;
+}
+
+function renderBibleLeft(pane, route) {
+	const { list, mine } = availableBibles();
+	if (!list.length) { pane.append(el('p', 'This server has no Bible versions yet: they are added on its admin panel.', 'empty')); return; }
+	const pick = el('select'); pick.setAttribute('aria-label', 'Bible version');
+	for (const b of list) { const o = el('option', b.name); o.value = b.id; pick.append(o); }
+	const current = route.version && list.some((b) => b.id === route.version) ? route.version : list.some((b) => b.id === store.get('read.bible')) ? store.get('read.bible') : list[0].id;
+	pick.value = current;
+	pick.onchange = () => { location.hash = `#/bible/${encodeURIComponent(pick.value)}`; };
+	pane.append(pick);
+	if (!mine) pane.append(el('p', profile ? 'You have no versions downloaded in the app yet, so these are all the versions on the server.' : 'Choose your name (⚙ Settings) to see the versions you downloaded in the app.', 'small muted'));
+	if (!bible || bible.id !== current) { openVersion(current).then(render).catch(() => pane.append(el('p', 'Could not load this version.', 'muted'))); return; }
+	const books = el('div', null, 'books'); books.style.marginTop = '.8rem';
+	bible.books.forEach((b, i) => {
+		const a = el('a', b.name, 'cell'); a.href = bibleHash(bible.id, i, 1);
+		if (i === route.book) a.setAttribute('aria-current', 'true');
+		books.append(a);
+	});
+	if (route.book == null || wide.matches) pane.append(books);
+}
+
+function renderBibleRight(pane, route) {
+	if (!bible || route.book == null) { pane.dataset.empty = 'Choose a book on the left.'; return; }
+	const book = bible.books[route.book];
+	if (!book) return;
+	const back = el('a', '← Books', 'back narrow-only'); back.href = `#/bible/${encodeURIComponent(bible.id)}`;
+	const wrap = el('div', null, 'verses-wrap');
+	wrap.append(back, el('div', bible.name, 'label'), el('h2', book.name));
+	const chapters = el('div', null, 'grid');
+	book.chapters.forEach((_, i) => {
+		const a = el('a', String(i + 1), 'cell'); a.href = bibleHash(bible.id, route.book, i + 1);
+		if (i + 1 === route.chapter) a.setAttribute('aria-current', 'true');
+		chapters.append(a);
+	});
+	wrap.append(chapters);
+	const ch = Math.min(Math.max(1, route.chapter || 1), book.chapters.length);
+	const verses = el('div', null, 'verses'); verses.style.marginTop = '1.2rem';
+	verses.append(el('h3', `${book.name} ${ch}`));
+	let first = null;
+	book.chapters[ch - 1].forEach((text, i) => {
+		const n = i + 1; const p = el('p');
+		const sup = el('sup', String(n)); p.append(sup, text);
+		if (route.verse && n >= route.verse && n <= (route.verseEnd || route.verse)) { p.className = 'hit'; first ||= p; }
+		verses.append(p);
+	});
+	wrap.append(verses);
+	const nav = el('div', null, 'chapnav');
+	const prev = el('button', '← Previous'); prev.disabled = ch <= 1 && route.book === 0;
+	prev.onclick = () => { location.hash = ch > 1 ? bibleHash(bible.id, route.book, ch - 1) : bibleHash(bible.id, route.book - 1, bible.books[route.book - 1].chapters.length); };
+	const next = el('button', 'Next →'); next.disabled = ch >= book.chapters.length && route.book === bible.books.length - 1;
+	next.onclick = () => { location.hash = ch < book.chapters.length ? bibleHash(bible.id, route.book, ch + 1) : bibleHash(bible.id, route.book + 1, 1); };
+	nav.append(prev, next); wrap.append(nav);
+	pane.append(wrap);
+	// To the passage: inside the reading pane on desktop, the page itself on a phone.
+	requestAnimationFrame(() => {
+		const target = first || verses;
+		if (wide.matches) pane.scrollTop = Math.max(0, target.offsetTop - pane.offsetTop - (first ? pane.clientHeight / 3 : 0));
+		else window.scrollTo(0, Math.max(0, target.getBoundingClientRect().top + window.scrollY - (first ? window.innerHeight / 3 : 80)));
+	});
+}
+
+// Following a verse link from a reading: open the version the person reads, at the passage.
+async function openReference(ref) {
+	const { list } = availableBibles();
+	if (!list.length) { alert('This server has no Bible versions yet.'); return; }
+	const id = list.some((b) => b.id === store.get('read.bible')) ? store.get('read.bible') : list[0].id;
+	try {
+		const v = await openVersion(id);
+		const b = bookIndexFor(ref, v);
+		location.hash = b == null ? `#/bible/${encodeURIComponent(id)}` : bibleHash(id, b, Math.min(ref.chapter, v.books[b].chapters.length), ref.verse_start, ref.verse_end);
+	} catch { alert('Could not open the Bible.'); }
+}
 
 // --- Readings -------------------------------------------------------------------
-for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => { tab = b.dataset.tab; store.set('read.tab', tab); if (location.hash) location.hash = ''; else render(); };
-
 function renderList(pane, currentId) {
 	const list = entries.filter((e) => kindOf(e) === tab).sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
 	if (!list.length) { pane.append(el('p', tab === 'lesson' ? 'No lessons yet.' : 'No daily readings yet.', 'empty')); return; }
@@ -216,8 +354,32 @@ function renderList(pane, currentId) {
 	}
 }
 
+// The body as paragraphs, with each verse reference the server found turned into a link.
+function bodyParagraphs(e) {
+	const out = [];
+	const refs = (e.references || []).filter((r) => r.start >= 0 && r.end <= e.body.length && r.start < r.end).sort((a, b) => a.start - b.start);
+	const re = /\n{2,}/g; let start = 0, m;
+	const parts = [];
+	while ((m = re.exec(e.body))) { parts.push([start, m.index]); start = m.index + m[0].length; }
+	parts.push([start, e.body.length]);
+	for (const [s, t] of parts) {
+		const text = e.body.slice(s, t);
+		if (!text.trim()) continue;
+		const p = el('p', null, text.trim().length < 40 && !/[.!?”"]$/.test(text.trim()) ? 'head' : '');
+		let at = s;
+		for (const r of refs.filter((r) => r.start >= s && r.end <= t)) {
+			if (r.start > at) p.append(e.body.slice(at, r.start));
+			const a = el('a', e.body.slice(r.start, r.end)); a.href = '#'; a.onclick = (ev) => { ev.preventDefault(); openReference(r); };
+			p.append(a); at = r.end;
+		}
+		if (at < t) p.append(e.body.slice(at, t));
+		out.push(p);
+	}
+	return out;
+}
+
 function renderEntry(pane, e) {
-	const back = el('a', '← Back', 'back'); back.href = '#';
+	const back = el('a', '← Back', 'back narrow-only'); back.href = '#';
 	const art = el('article');
 	art.append(back, el('div', heading(e), 'label'), el('h2', e.title));
 	if (e.scripture) art.append(el('div', e.scripture, 'muted'));
@@ -250,50 +412,139 @@ function renderEntry(pane, e) {
 		box.append(speedSel);
 		art.append(box);
 	}
-
 	const body = el('div', null, 'body');
-	if (e.body) {
-		for (const para of e.body.split(/\n{2,}/)) {
-			const text = para.trim(); if (!text) continue;
-			// A short line on its own ("Prayer", "Lesson Scripture") reads as a heading.
-			body.append(el('p', text, text.length < 40 && !/[.!?”"]$/.test(text) ? 'head' : ''));
-		}
-	} else if (e.archived) {
-		body.append(el('p', 'Archived on the server: the full text is no longer available here.', 'muted'));
-	}
+	if (e.body) body.append(...bodyParagraphs(e));
+	else if (e.archived) body.append(el('p', 'Archived on the server: the full text is no longer available here.', 'muted'));
 	art.append(body);
 	pane.append(art);
+	pane.scrollTop = 0;
+}
+
+// --- Settings page ----------------------------------------------------------------
+async function renderSettings(pane) {
+	const s = el('div', null, 'settings');
+	const back = el('a', '← Back', 'back'); back.href = '#';
+	s.append(back, el('h2', 'Settings'));
+
+	s.append(el('h3', 'Profile'));
+	const prof = el('div', null, 'choices');
+	prof.append(el('span', profile ? `You are reading as ${profile.name}.` : 'No name chosen yet.', 'muted'));
+	const sw = el('button', profile ? 'Switch' : 'Choose your name', 'chip'); sw.type = 'button'; sw.onclick = () => askProfile();
+	prof.append(sw); s.append(prof);
+
+	s.append(el('h3', 'Theme'));
+	const themes = el('div', null, 'choices');
+	for (const [mode, label] of [['auto', 'System'], ['light', 'Light'], ['dark', 'Dark']]) {
+		const b = el('button', label, 'chip'); b.type = 'button';
+		b.setAttribute('aria-pressed', String((root.dataset.theme || 'auto') === mode));
+		b.onclick = () => { setTheme(mode); renderSettingsInPlace(); };
+		themes.append(b);
+	}
+	s.append(themes);
+
+	s.append(el('h3', 'Wallpaper'));
+	s.append(el('p', library.wallpapers.length ? 'Wallpapers from this server (from wallhaven.cc). Your choice is kept in this browser.' : 'This server has no wallpapers yet: they are added on its admin panel.', 'small muted'));
+	const chips = el('div', null, 'choices');
+	const all = [{ id: 'all', name: 'All', count: library.wallpapers.length }, ...library.topics];
+	if (!all.some((t) => t.id === wallTopic)) wallTopic = 'all';
+	for (const t of all) {
+		const b = el('button', `${t.name} ${t.count}`, 'chip'); b.type = 'button';
+		b.setAttribute('aria-pressed', String(t.id === wallTopic));
+		b.onclick = () => { wallTopic = t.id; renderSettingsInPlace(); };
+		chips.append(b);
+	}
+	s.append(chips);
+	const grid = el('div', null, 'walls');
+	const none = el('button', 'None', 'wall none'); none.type = 'button';
+	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper)); none.onclick = () => { setWallpaper(null); renderSettingsInPlace(); };
+	grid.append(none);
+	for (const w of library.wallpapers.filter((w) => wallTopic === 'all' || w.topic === wallTopic)) {
+		const b = el('button', null, 'wall'); b.type = 'button';
+		b.style.backgroundColor = w.colors?.[0] || '';
+		b.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(w.id)}/thumb")`;
+		b.setAttribute('aria-label', `Wallpaper ${w.id}`);
+		b.setAttribute('aria-pressed', String(root.dataset.wallpaper === w.id));
+		b.onclick = () => { setWallpaper(w.id); renderSettingsInPlace(); };
+		grid.append(b);
+	}
+	s.append(grid);
+
+	const slider = (label, key, cssVar, min, def) => {
+		const row = el('label', null, 'slider small');
+		const input = el('input'); input.type = 'range'; input.min = String(min); input.max = '100'; input.step = '1';
+		const val = el('span', null, 'val');
+		input.value = store.get(key, String(def)); val.textContent = input.value + '%';
+		input.disabled = !root.dataset.wallpaper;
+		input.oninput = () => { val.textContent = setPercent(cssVar, key, input.value, min) + '%'; };
+		row.append(el('span', label), input, val);
+		return row;
+	};
+	s.append(el('h3', 'Opacity'));
+	if (!root.dataset.wallpaper) s.append(el('p', 'Choose a wallpaper first.', 'small muted'));
+	s.append(slider('Text window', 'read.opacity', '--win', 50, 100));
+	s.append(slider('List items', 'read.itemOpacity', '--item', 0, 100));
+	pane.append(s);
+}
+function renderSettingsInPlace() { const top = $('right').scrollTop; render(); $('right').scrollTop = top; }
+
+// --- Routing ---------------------------------------------------------------------
+function route() {
+	const h = location.hash;
+	let m;
+	if (h === '#/settings') return { view: 'settings' };
+	if ((m = /^#\/entry\/(\d+)$/.exec(h))) return { view: 'entry', id: Number(m[1]) };
+	if ((m = /^#\/bible\/([a-z0-9]+)(?:\/(\d+)\/(\d+)(?:\/(\d+)(?:-(\d+))?)?)?$/.exec(h))) {
+		return { view: 'bible', version: decodeURIComponent(m[1]), book: m[2] != null ? Number(m[2]) : null, chapter: m[3] ? Number(m[3]) : null, verse: m[4] ? Number(m[4]) : null, verseEnd: m[5] ? Number(m[5]) : null };
+	}
+	return { view: 'list' };
 }
 
 function render() {
-	for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
-	const m = /^#\/entry\/(\d+)$/.exec(location.hash);
-	let entry = m && entries.find((e) => e.id === Number(m[1]));
-	if (entry && kindOf(entry) !== tab) entry = null; // switching tab closes it
-	const listPane = $('list-pane'), entryPane = $('entry-pane');
-	listPane.replaceChildren(); entryPane.replaceChildren();
-	renderList(listPane, entry?.id);
-	if (entry) { renderEntry(entryPane, entry); if (!wide.matches) window.scrollTo(0, 0); else entryPane.scrollIntoView({ block: 'nearest' }); }
-	document.body.classList.toggle('reading', Boolean(entry));
+	const r = route();
+	if (r.view === 'bible') tab = 'bible';
+	if (r.view === 'entry') { const e = entries.find((x) => x.id === r.id); if (e) tab = kindOf(e); }
+	for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', String(r.view !== 'settings' && b.dataset.tab === tab));
+	const left = $('left'), right = $('right');
+	left.replaceChildren(); right.replaceChildren(); delete right.dataset.empty;
+	$('columns').classList.toggle('single', r.view === 'settings');
+	let detail = false;
+	if (r.view === 'settings') { renderSettings(right); detail = true; }
+	else if (tab === 'bible') {
+		renderBibleLeft(left, r.view === 'bible' ? r : {});
+		renderBibleRight(right, r.view === 'bible' ? r : {});
+		detail = r.view === 'bible' && r.book != null;
+	} else {
+		const e = r.view === 'entry' && entries.find((x) => x.id === r.id && kindOf(x) === tab);
+		renderList(left, e?.id);
+		if (e) { renderEntry(right, e); detail = true; } else right.dataset.empty = 'Choose a reading on the left.';
+	}
+	document.body.classList.toggle('detail', detail);
+	if (!wide.matches && detail) window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', render);
+for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => {
+	tab = b.dataset.tab; store.set('read.tab', tab);
+	const target = tab === 'bible' && bible ? `#/bible/${encodeURIComponent(bible.id)}` : '';
+	if (location.hash !== target) location.hash = target; else render();
+};
 
-// The list beside a reading stays in view under the header on desktop.
+// The panes sit under the header on desktop.
 function measureTop() { requestAnimationFrame(() => root.style.setProperty('--top-h', $('top').offsetHeight + 'px')); }
 window.addEventListener('resize', measureTop);
 
-renderTheme(); applyWallpaper();
-setOpacity(store.get('read.opacity', '100'));
+applyWallpaper();
 Promise.all([
-	fetch('/api/entries').then((r) => r.json()),
-	fetch('/api/voices').then((r) => (r.ok ? r.json() : { voices: [], default: null })).catch(() => ({ voices: [], default: null })),
-]).then(([list, v]) => {
-	entries = list.entries || []; voices = v;
-	const m = /^#\/entry\/(\d+)$/.exec(location.hash);
-	const linked = m && entries.find((e) => e.id === Number(m[1]));
-	if (linked) tab = kindOf(linked); // a link to a reading opens on its tab
+	getJson('/api/entries'),
+	getJson('/api/voices').catch(() => ({ voices: [], default: null })),
+	getJson('/api/bibles').catch(() => ({ bibles: [] })),
+	getJson('/api/wallpapers').catch(() => ({ topics: [], wallpapers: [] })),
+	loadProfileBibles(),
+]).then(([list, v, b, w]) => {
+	entries = list.entries || []; voices = v; serverBibles = b.bibles || []; library = w;
 	render();
-}).catch(() => { $('list-pane').replaceChildren(el('p', 'Could not load the entries. Try again in a moment.', 'empty')); });
+	// First visit in this browser: ask who is reading (once, unless they choose a name).
+	if (!profile && store.get('read.askedProfile') !== '1') askProfile();
+}).catch(() => { $('left').replaceChildren(el('p', 'Could not load the readings. Try again in a moment.', 'empty')); });
 </script>
 </body>
 </html>

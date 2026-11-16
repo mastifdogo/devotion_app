@@ -157,11 +157,15 @@ the speed you choose; and **Sign in to the admin panel** (`/admin`). The
 reader needs no sign-in, like the app. Highlights, notes and the Bible are
 in the Android app only.
 
-On a desktop the reader shows the list on the left and the open reading on
-the right; on a phone, one at a time. **Wallpaper** in its top bar picks one
-of the server's wallpapers as the background, with the text on a window
-over it (the wallpaper shows around the edges) and a **Text window
-opacity** slider; the choice is remembered by that browser.
+The reader asks for your name the first time (the same profiles as the app)
+and has three tabs: **Daily readings**, **Lessons** and **Bible**. The Bible
+tab offers the versions you have downloaded in the app (the app tells the
+server), or all of the server's if you have none yet; verse references in a
+reading are links that open it at the passage. On a desktop the list and the
+reading sit side by side, each scrolling on its own; on a phone, one at a
+time. The ⚙ icon opens a settings page: your profile, the theme, a
+wallpaper from the server, and the opacity of the text windows and of the
+list items. The house icon goes back to the start page.
 
 ### Wallpapers
 
@@ -266,6 +270,7 @@ No authentication; meant for a home network.
 | `GET` / `POST /api/profiles` | List people; create one from `{"name":"…"}` (an existing name returns that profile). |
 | `GET /api/profiles/<id>/annotations[?since=]` | That person's highlights and notes. |
 | `PUT /api/profiles/<id>/annotations/<uuid>` | Save one; the later `updated_at` wins. Delete with `"deleted":true`. |
+| `GET` / `PUT /api/profiles/<id>/bibles` | The Bible versions that person has downloaded in the app (`{"bibles":["kjv"]}`; PUT replaces the list). |
 | `GET /api/bibles`, `GET /api/bibles/<id>` | Bible versions on the server, and one version's text. |
 | `GET /api/wallpapers`, `/api/wallpapers/<id>`, `/api/wallpapers/<id>/thumb` | Wallpapers on the server by topic, a full image, a thumbnail. |
 

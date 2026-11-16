@@ -554,6 +554,16 @@ test('profiles, and notes and highlights kept per profile', async (t) => {
 	assert.deepEqual((await (await call(since)).json()).annotations.map((a) => a.deleted), [true]);
 	assert.equal((await (await call(`/api/profiles/${maria.id}/annotations`)).json()).annotations.length, 0);
 
+	// Which Bible versions each person has in the app, for the website.
+	assert.deepEqual(await (await call(`/api/profiles/${maria.id}/bibles`)).json(), { bibles: [] });
+	assert.equal((await call(`/api/profiles/${maria.id}/bibles`, { body: { bibles: ['KJV!'] }, method: 'PUT' })).status, 400);
+	assert.equal((await call(`/api/profiles/${maria.id}/bibles`, { body: { bibles: 'kjv' }, method: 'PUT' })).status, 400);
+	assert.equal((await call('/api/profiles/999/bibles', { body: { bibles: [] }, method: 'PUT' })).status, 404);
+	assert.deepEqual(await (await call(`/api/profiles/${maria.id}/bibles`, { body: { bibles: ['kjv', 'asv', 'kjv'] }, method: 'PUT' })).json(), { bibles: ['asv', 'kjv'] });
+	await call(`/api/profiles/${maria.id}/bibles`, { body: { bibles: ['ylt'] }, method: 'PUT' }); // replaces the list
+	assert.deepEqual(await (await call(`/api/profiles/${maria.id}/bibles`)).json(), { bibles: ['ylt'] });
+	assert.deepEqual(await (await call(`/api/profiles/${sam.id}/bibles`)).json(), { bibles: [] });
+
 	// The admin page lists people and can remove one with their notes.
 	await put(sam.id, note);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
