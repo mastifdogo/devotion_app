@@ -109,6 +109,14 @@ fun barContainerColor(hasWallpaper: Boolean): Color =
     if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surface
 
 /**
+ * Fill of the list item cards inside the text window (entry cards, Bible chapters, books and
+ * versions): surfaceContainer at the list item opacity; at 0% only their outline remains.
+ */
+@Composable
+fun itemCardFill(opacity: Float): Color =
+    MaterialTheme.colorScheme.surfaceContainer.copy(alpha = WindowLogic.clampItemOpacity(opacity))
+
+/**
  * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),
  * inset from the sides and bottom (more, and at most 720dp wide, when 600dp or wider), so the
  * wallpaper frames it. Without one: just the content, as before wallpapers existed.

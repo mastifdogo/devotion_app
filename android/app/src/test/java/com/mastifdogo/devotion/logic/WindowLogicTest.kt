@@ -35,4 +35,16 @@ class WindowLogicTest {
         assertEquals(WindowLayout(24, 720), WindowLogic.layoutFor(1280))
         assertEquals(WindowLayout(12, null), WindowLogic.layoutFor(0))
     }
+
+    @Test
+    fun itemOpacity_isZeroToFull() {
+        assertEquals(0f, WindowLogic.clampItemOpacity(-0.2f), 0f)
+        assertEquals(0f, WindowLogic.clampItemOpacity(0f), 0f)
+        assertEquals(0.85f, WindowLogic.clampItemOpacity(0.85f), 0f)
+        assertEquals(1f, WindowLogic.clampItemOpacity(3f), 0f)
+        assertEquals(1f, WindowLogic.clampItemOpacity(Float.NaN), 0f)
+        assertEquals("85%", WindowLogic.itemOpacityLabel(0.85f))
+        assertEquals("0%", WindowLogic.itemOpacityLabel(0f))
+        assertEquals("100%", WindowLogic.itemOpacityLabel(1.5f))
+    }
 }

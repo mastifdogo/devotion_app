@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -159,7 +160,7 @@ private fun BibleVersions(vm: MainViewModel) {
             )
         }
         for (info in downloaded) {
-            VersionRow(info = info) {
+            VersionRow(vm = vm, info = info) {
                 Button(onClick = { vm.openBibleVersion(info.id) }) { Text("Read") }
                 Spacer(modifier = Modifier.width(8.dp))
                 OutlinedButton(onClick = { vm.deleteBible(info) }) { Text("Delete") }
@@ -198,7 +199,7 @@ private fun BibleVersions(vm: MainViewModel) {
         for (info in available) {
             val running = vm.bibleDownloads.containsKey(info.id)
             val fraction = vm.bibleDownloads[info.id]
-            VersionRow(info = info) {
+            VersionRow(vm = vm, info = info) {
                 when {
                     running -> Text(
                         text = if (fraction != null) "Downloading… ${(fraction * 100f).toInt()}%" else "Downloading…",
@@ -228,12 +229,30 @@ private fun BibleVersions(vm: MainViewModel) {
     }
 }
 
+/**
+ * List item card over a wallpaper: surfaceContainer at the list item opacity with an outline
+ * (at 0% only the outline). Nothing without a wallpaper.
+ */
 @Composable
-private fun VersionRow(info: BibleInfo, actions: @Composable () -> Unit) {
+private fun itemCardModifier(vm: MainViewModel, shape: Shape): Modifier =
+    if (vm.appWallpaper != null) {
+        Modifier
+            .clip(shape)
+            .background(itemCardFill(vm.listItemOpacity))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+    } else {
+        Modifier
+    }
+
+@Composable
+private fun VersionRow(vm: MainViewModel, info: BibleInfo, actions: @Composable () -> Unit) {
+    val card = vm.appWallpaper != null
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            .padding(vertical = if (card) 4.dp else 8.dp)
+            .then(itemCardModifier(vm, RoundedCornerShape(12.dp)))
+            .then(if (card) Modifier.padding(12.dp) else Modifier),
     ) {
         Text(text = info.name.ifBlank { info.id }, style = MaterialTheme.typography.bodyLarge)
         val details = listOfNotNull(
@@ -258,16 +277,26 @@ private fun VersionRow(info: BibleInfo, actions: @Composable () -> Unit) {
 private fun BibleBooks(vm: MainViewModel, bible: Bible) {
     BibleHeader(vm, bible.name.ifBlank { "Bible" }, showVersions = true)
     LazyColumn(modifier = Modifier.fillMaxSize()) {
+        val cards = vm.appWallpaper != null
         itemsIndexed(bible.books) { index, book ->
             Text(
                 text = book.name,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(
+                        if (cards) {
+                            Modifier
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                                .then(itemCardModifier(vm, RoundedCornerShape(12.dp)))
+                        } else {
+                            Modifier
+                        },
+                    )
                     .clickable { vm.pickBibleBook(index) }
                     .padding(horizontal = 20.dp, vertical = 14.dp),
             )
-            HorizontalDivider()
+            if (!cards) HorizontalDivider()
         }
     }
 }
@@ -294,7 +323,7 @@ private fun BibleChapters(vm: MainViewModel, bible: Bible) {
                     // outline; otherwise the tinted cells as before.
                     .then(
                         if (hasWallpaper) {
-                            Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                            itemCardModifier(vm, RoundedCornerShape(8.dp))
                         } else {
                             Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         },

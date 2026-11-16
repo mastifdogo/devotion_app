@@ -4,7 +4,9 @@ import android.content.Context
 import com.mastifdogo.devotion.data.AnnotationFile
 import com.mastifdogo.devotion.data.AnnotationStore
 import com.mastifdogo.devotion.data.ApiClient
+import com.mastifdogo.devotion.data.ApiException
 import com.mastifdogo.devotion.data.AppJson
+import com.mastifdogo.devotion.data.BibleStore
 import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.data.EntryStore
 import com.mastifdogo.devotion.data.SettingsStore
@@ -43,7 +45,14 @@ class BackgroundSync(context: Context) {
                     syncVoices(api, server, key)
                     val profile = settings.profileFor(key)
                     if (profile != null) syncAnnotations(api, server, key, profile.id)
-                    if (settings.autoDownloadAudio) downloadAudio(store, api, server, key, cache.entries)
+                    // Only the Settings voice is kept: drop other voices (archived audio stays) ...
+                    val voice = settingsVoice(key)
+                    for (name in AudioLogic.filesForOtherVoices(store.cachedAudioFiles(), cache.entries, voice)) {
+                        store.deleteAudioFile(name)
+                    }
+                    // ... and download that voice.
+                    if (settings.autoDownloadAudio) downloadAudio(store, api, server, voice, cache.entries)
+                    if (profile != null) reportBibles(api, server, key, profile.id)
                 }
             }
             settings.lastSyncMillis = System.currentTimeMillis()
@@ -81,22 +90,46 @@ class BackgroundSync(context: Context) {
         annotationStore.save(key, profileId, AnnotationFile(list, response.serverTime ?: file.serverTime))
     }
 
-    private suspend fun downloadAudio(store: EntryStore, api: ApiClient, server: String, key: String, entries: List<Entry>) {
-        val preferred = settings.preferredVoice(key)
-        val serverDefault = settings.voicesJson(key)?.takeIf { it.isNotEmpty() }?.let { json ->
-            try {
-                AppJson.decodeFromString(VoicesResponse.serializer(), json).defaultVoice
-            } catch (e: Exception) {
-                null
-            }
+    /** The voice chosen in Settings, else the server default; null when not known. */
+    private fun settingsVoice(key: String): String? {
+        settings.preferredVoice(key)?.let { return it }
+        val json = settings.voicesJson(key)?.takeIf { it.isNotEmpty() } ?: return null
+        return try {
+            AppJson.decodeFromString(VoicesResponse.serializer(), json).defaultVoice?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
         }
+    }
+
+    private suspend fun downloadAudio(store: EntryStore, api: ApiClient, server: String, voice: String?, entries: List<Entry>) {
         for (entry in entries) {
-            val cached = store.cachedAudioFiles()
-            val playable = AudioLogic.playableVariants(entry, cached)
-            val voice = AudioLogic.pickVoice(playable, preferred, serverDefault) ?: continue
-            if (AudioLogic.fileName(entry.id, voice) in cached) continue
-            val variant = playable.firstOrNull { it.voice == voice } ?: continue
+            val keep = AudioLogic.voiceToKeep(entry, voice) ?: continue
+            if (store.audioFile(entry.id, keep).isFile) continue
+            val variant = AudioLogic.variants(entry).firstOrNull { it.voice == keep } ?: continue
             store.downloadAudio(api, server, entry, variant) { }
+        }
+    }
+
+    /**
+     * Tells the server which Bible versions this profile has on the phone. Best-effort: a 404 only
+     * means "profile gone" when the profile list no longer has it (older servers answer 404 too).
+     */
+    private fun reportBibles(api: ApiClient, server: String, key: String, profileId: Long) {
+        val ids = BibleStore(appContext.filesDir).downloaded().map { it.id }
+        try {
+            api.putProfileBibles(server, profileId, ids)
+        } catch (e: ApiException) {
+            if (e.httpCode == 404) {
+                val gone = try {
+                    api.profiles(server).none { it.id == profileId }
+                } catch (x: Exception) {
+                    false
+                }
+                // The app asks for a profile again on its next sync.
+                if (gone) settings.setProfileFor(key, null)
+            }
+        } catch (e: Exception) {
+            // Silent: the list is sent again on the next sync.
         }
     }
 }

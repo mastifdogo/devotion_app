@@ -329,7 +329,8 @@ private fun VoiceSection(vm: MainViewModel) {
         }
     }
     Text(
-        text = "Entries that do not have this voice play in the server's default voice.",
+        text = "Only this voice is kept on the phone: changing it deletes the other voices' audio " +
+            "(archived entries keep theirs) and downloads this one.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -447,6 +448,26 @@ private fun WallpaperSection(vm: MainViewModel) {
         value = vm.windowOpacity,
         onValueChange = { vm.updateWindowOpacity(it) },
         valueRange = WindowLogic.MIN_OPACITY..WindowLogic.MAX_OPACITY,
+        enabled = current != null,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (current == null) {
+        Text(
+            text = "Choose a wallpaper first",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    // The cards inside the window (entries, Bible chapters, books, versions): 0% = outline only.
+    Text(
+        text = "List item opacity: ${WindowLogic.itemOpacityLabel(vm.listItemOpacity)}",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = vm.listItemOpacity,
+        onValueChange = { vm.updateListItemOpacity(it) },
+        valueRange = 0f..1f,
         enabled = current != null,
         modifier = Modifier.fillMaxWidth(),
     )

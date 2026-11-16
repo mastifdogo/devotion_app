@@ -134,6 +134,10 @@ data class ProfilesResponse(val profiles: List<Profile> = emptyList())
 @Serializable
 data class CreateProfileRequest(val name: String)
 
+/** Body and answer of PUT /api/profiles/{id}/bibles: the ids of the versions on this phone. */
+@Serializable
+data class ProfileBibles(val bibles: List<String> = emptyList())
+
 @Serializable
 data class ErrorResponse(val error: String? = null)
 

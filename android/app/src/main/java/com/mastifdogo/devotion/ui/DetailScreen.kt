@@ -23,8 +23,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -56,6 +54,7 @@ import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.logic.EntryKinds
+import com.mastifdogo.devotion.logic.PlayerOffer
 import com.mastifdogo.devotion.logic.Passage
 import com.mastifdogo.devotion.logic.TextLogic
 import java.time.ZoneId
@@ -460,13 +459,14 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
                 )
             }
 
-            val voice = vm.voiceFor(entry)
-            if (voice == null) {
+            // Only the voice chosen in Settings is played (archived entries: whatever is cached).
+            val offer = vm.playerOffer(entry)
+            if (offer !is PlayerOffer.Play) {
                 Text(
-                    text = if (entry.archived) {
-                        "Archived on the server — the audio is no longer available."
-                    } else {
-                        "No audio for this entry yet."
+                    text = when {
+                        offer is PlayerOffer.NotReady -> "Audio in ${vm.voiceLabel(offer.voice)} isn't ready yet."
+                        entry.archived -> "Archived on the server — the audio is no longer available."
+                        else -> "No audio for this entry yet."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -474,13 +474,23 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
                 )
                 return@Column
             }
+            val voice = offer.voice
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                VoiceChooser(vm, entry, voice)
+                if (voice.isNotEmpty()) {
+                    Text(
+                        // Kept audio of an archived entry in another voice is labelled as such.
+                        text = if (offer.otherVoice) "Voice: ${vm.voiceLabel(voice)}" else vm.voiceLabel(voice),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Spacer(modifier = Modifier.size(1.dp))
+                }
                 // Playback speed: each tap steps to the next speed.
                 OutlinedButton(onClick = { vm.cyclePlaybackSpeed() }) {
                     Text(MainViewModel.speedLabel(vm.playbackSpeed))
@@ -514,42 +524,6 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
             }
         }
       }
-    }
-}
-
-/** The entry's current voice; a menu to switch when the entry has audio in more than one voice. */
-@Composable
-private fun VoiceChooser(vm: MainViewModel, entry: Entry, voice: String) {
-    val variants = vm.entryVoices(entry)
-    if (variants.size <= 1) {
-        if (voice.isNotEmpty()) {
-            Text(
-                text = vm.voiceLabel(voice),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Spacer(modifier = Modifier.size(1.dp))
-        }
-        return
-    }
-    var expanded by remember(entry.id) { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }) {
-            Text("Voice: ${vm.voiceLabel(voice)} ▾")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            for (variant in variants) {
-                val name = vm.voiceLabel(variant.voice)
-                DropdownMenuItem(
-                    text = { Text(if (variant.voice == voice) "$name ✓" else name) },
-                    onClick = {
-                        expanded = false
-                        vm.chooseVoice(entry, variant.voice)
-                    },
-                )
-            }
-        }
     }
 }
 

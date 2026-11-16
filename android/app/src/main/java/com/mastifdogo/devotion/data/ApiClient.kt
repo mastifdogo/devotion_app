@@ -98,6 +98,24 @@ class ApiClient {
         }
     }
 
+    /**
+     * PUT /api/profiles/{id}/bibles: replaces the list of Bible versions this profile has on the
+     * phone. A 404 surfaces as ApiException(httpCode = 404).
+     */
+    fun putProfileBibles(baseUrl: String, profileId: Long, bibleIds: List<String>): List<String> {
+        val url = apiUrl(baseUrl).addPathSegments("api/profiles/$profileId/bibles").build()
+        val payload = AppJson.encodeToString(ProfileBibles.serializer(), ProfileBibles(bibleIds))
+        val request = Request.Builder().url(url)
+            .header("Accept", "application/json")
+            .put(payload.toRequestBody(jsonType))
+            .build()
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw httpError(response.code, text, "Reporting Bible versions")
+            return decode("bibles") { AppJson.decodeFromString(ProfileBibles.serializer(), text) }.bibles
+        }
+    }
+
     // ---- annotations ------------------------------------------------------------------------
 
     /** GET /api/profiles/{id}/annotations[?since=...]. A 404 means the profile no longer exists. */

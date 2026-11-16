@@ -100,6 +100,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getFloat(KEY_WINDOW_OPACITY, 1f)
         set(value) = prefs.edit().putFloat(KEY_WINDOW_OPACITY, value).apply()
 
+    /** Opacity of the list item cards inside the text window, 0..1 (default 1). */
+    var listItemOpacity: Float
+        get() = prefs.getFloat(KEY_ITEM_OPACITY, 1f)
+        set(value) = prefs.edit().putFloat(KEY_ITEM_OPACITY, value).apply()
+
     /** Topic chip selected on the Wallpapers screen ("" = All). */
     var wallTopic: String
         get() = prefs.getString(KEY_WALL_TOPIC, "") ?: ""
@@ -173,6 +178,7 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_ID = "wallpaper_id"
         const val KEY_WALL_URL = "wallpaper_url"
         const val KEY_WINDOW_OPACITY = "text_window_opacity"
+        const val KEY_ITEM_OPACITY = "list_item_opacity"
         const val KEY_WALL_TOPIC = "wall_topic"
         const val KEY_AUTO_SYNC = "auto_sync"
         const val KEY_DAILY_SYNC = "daily_sync_minutes"

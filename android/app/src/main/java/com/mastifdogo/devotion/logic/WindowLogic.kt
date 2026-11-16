@@ -20,6 +20,14 @@ object WindowLogic {
     fun clampOpacity(value: Float): Float =
         if (value.isNaN() || value.isInfinite()) DEFAULT_OPACITY else value.coerceIn(MIN_OPACITY, MAX_OPACITY)
 
+    /** The list item opacity, 0%..100%; NaN or infinite values give 100%. */
+    fun clampItemOpacity(value: Float): Float =
+        if (value.isNaN() || value.isInfinite()) 1f else value.coerceIn(0f, 1f)
+
+    /** "85%" for a list item opacity of 0.85 (after clamping). */
+    fun itemOpacityLabel(value: Float): String =
+        String.format(Locale.ROOT, "%d%%", (clampItemOpacity(value) * 100f).roundToInt())
+
     /** "95%" for 0.95 (after clamping). */
     fun opacityLabel(value: Float): String =
         String.format(Locale.ROOT, "%d%%", (clampOpacity(value) * 100f).roundToInt())

@@ -4,6 +4,7 @@ import com.mastifdogo.devotion.data.AudioVariant
 import com.mastifdogo.devotion.data.Entry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioLogicTest {
@@ -88,5 +89,63 @@ class AudioLogicTest {
             listOf("12-en_US-joe-medium.mp3", "14-en_US-amy-medium.mp3", "12.mp3"),
             AudioLogic.staleFiles(cached, entries),
         )
+    }
+
+    // ---- one voice on the phone -------------------------------------------------------------
+
+    private val AMY = "en_US-amy-medium"
+    private val JOE = "en_US-joe-medium"
+
+    @Test
+    fun voiceToKeep_onlyTheSettingsVoice() {
+        assertEquals(JOE, AudioLogic.voiceToKeep(entry(), JOE))
+        assertNull(AudioLogic.voiceToKeep(entry(audio = listOf(amy)), JOE))
+        // Unknown Settings voice: the server default, i.e. the variant matching audio_sha256 ("aa" = Amy).
+        assertEquals(AMY, AudioLogic.voiceToKeep(entry(audio = listOf(joe, amy)), null))
+        // Older server: its single variant whatever the setting.
+        assertEquals("", AudioLogic.voiceToKeep(entry(audio = null), JOE))
+        assertNull(AudioLogic.voiceToKeep(entry(audio = emptyList()), JOE))
+        assertNull(AudioLogic.voiceToKeep(entry(archived = true), JOE))
+    }
+
+    @Test
+    fun playerOffer_liveEntries() {
+        assertEquals(PlayerOffer.Play(JOE, false), AudioLogic.playerOffer(entry(), JOE, emptySet()))
+        // The entry does not have the Settings voice: not ready, no other voice offered.
+        assertEquals(PlayerOffer.NotReady(JOE), AudioLogic.playerOffer(entry(audio = listOf(amy)), JOE, setOf("12-en_US-amy-medium.mp3")))
+        assertEquals(PlayerOffer.NoAudio, AudioLogic.playerOffer(entry(audio = emptyList(), hasAudio = false), JOE, emptySet()))
+        assertEquals(PlayerOffer.Play("", false), AudioLogic.playerOffer(entry(audio = null), JOE, emptySet()))
+        assertEquals(PlayerOffer.Play(AMY, false), AudioLogic.playerOffer(entry(), null, emptySet()))
+    }
+
+    @Test
+    fun playerOffer_archivedEntriesPlayWhatIsCached() {
+        val archived = entry(archived = true)
+        assertEquals(PlayerOffer.NoAudio, AudioLogic.playerOffer(archived, JOE, emptySet()))
+        assertEquals(PlayerOffer.Play(JOE, false), AudioLogic.playerOffer(archived, JOE, setOf("12-en_US-joe-medium.mp3", "12-en_US-amy-medium.mp3")))
+        assertEquals(PlayerOffer.Play(AMY, true), AudioLogic.playerOffer(archived, JOE, setOf("12-en_US-amy-medium.mp3")))
+    }
+
+    @Test
+    fun filesForOtherVoices_keepsSettingsVoiceAndArchivedAudio() {
+        val entries = listOf(
+            entry(id = 12),
+            entry(id = 13, audio = listOf(amy)),
+            entry(id = 14, archived = true),
+            entry(id = 15, audio = null),
+        )
+        val cached = listOf(
+            "12-en_US-amy-medium.mp3", "12-en_US-joe-medium.mp3",
+            "13-en_US-amy-medium.mp3",
+            "14-en_US-amy-medium.mp3", "14-en_US-joe-medium.mp3",
+            "15-default.mp3",
+            "99-en_US-joe-medium.mp3",
+            "12-en_US-amy-medium.mp3.part",
+        )
+        assertEquals(
+            listOf("12-en_US-amy-medium.mp3", "13-en_US-amy-medium.mp3", "99-en_US-joe-medium.mp3"),
+            AudioLogic.filesForOtherVoices(cached, entries, JOE),
+        )
+        assertTrue(AudioLogic.filesForOtherVoices(cached, entries, null).isEmpty())
     }
 }

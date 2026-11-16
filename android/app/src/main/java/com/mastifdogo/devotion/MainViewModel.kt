@@ -41,6 +41,7 @@ import com.mastifdogo.devotion.logic.AutoSync
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
+import com.mastifdogo.devotion.logic.PlayerOffer
 import com.mastifdogo.devotion.logic.ServerAddress
 import com.mastifdogo.devotion.logic.ServerWallpaper
 import com.mastifdogo.devotion.logic.SyncScheduleLogic
@@ -352,6 +353,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         profileError = null
         loadProfileContext()
         syncAnnotations(reportErrors = true)
+        reportBibles()
+    }
+
+    /**
+     * Tells the server which Bible versions this profile has on the phone (one PUT replaces the
+     * whole list). Silent on failure. A 404 means "profile gone" only if the profile list no
+     * longer has it (older servers answer 404 for this call too); then it is cleared and asked for.
+     */
+    private fun reportBibles() {
+        val current = profile ?: return
+        if (!isServerConfigured) return
+        val url = serverUrl
+        val key = serverKey
+        val ids = downloadedBibles.map { it.id }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.putProfileBibles(url, current.id, ids) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiException) {
+                if (e.httpCode != 404) return@launch
+                val gone = try {
+                    withContext(Dispatchers.IO) { api.profiles(url) }.none { it.id == current.id }
+                } catch (x: CancellationException) {
+                    throw x
+                } catch (x: Exception) {
+                    false
+                }
+                if (gone && sameProfileContext(key, current.id)) {
+                    settings.setProfileFor(key, null)
+                    loadProfileContext()
+                    openProfilePrompt()
+                }
+            } catch (e: Exception) {
+                // Best-effort: sent again after the next sync.
+            }
+        }
     }
 
     // ---- annotations (highlights and comments) ----------------------------------------------
@@ -557,7 +595,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     stopPlayback()
                 }
                 refreshVoices()
+                deleteOtherVoices()
                 if (autoDownload) startAutoDownload()
+                reportBibles()
                 if (serverKey == key) {
                     if (profile != null) {
                         syncAnnotations(reportErrors = true)
@@ -654,8 +694,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var preferredVoice: String? by mutableStateOf(null)
         private set
 
-    /** Voice chosen in the player for individual entries during this session. */
-    private var chosenVoices: Map<Long, String> by mutableStateOf(emptyMap())
     private var voicesJob: Job? = null
 
     private fun loadVoiceContext() {
@@ -688,9 +726,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val response = withContext(Dispatchers.IO) { api.voices(url) }
                 if (serverKey == key) {
+                    val before = selectedSettingsVoice
                     val json = if (response == null) "" else AppJson.encodeToString(VoicesResponse.serializer(), response)
                     settings.setVoicesJson(key, json)
                     applyVoicesJson(json)
+                    // Following the server default, which changed: switch the kept voice too.
+                    if (selectedSettingsVoice != before) onSettingsVoiceChanged()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -705,11 +746,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = preferredVoice ?: serverDefaultVoice
 
     fun updatePreferredVoice(voice: String) {
+        if (voice == preferredVoice) return
         preferredVoice = voice
         settings.setPreferredVoice(serverKey, voice)
-        if (autoDownload) {
-            autoDownloadJob?.cancel()
-            startAutoDownload()
+        onSettingsVoiceChanged()
+    }
+
+    /** The phone keeps one voice: delete the others (archived audio stays), then fetch the new one. */
+    private fun onSettingsVoiceChanged() {
+        autoDownloadJob?.cancel()
+        deleteOtherVoices()
+        if (autoDownload) startAutoDownload()
+    }
+
+    /** Deletes cached audio of voices other than the Settings voice (see AudioLogic.filesForOtherVoices). */
+    private fun deleteOtherVoices() {
+        val voice = selectedSettingsVoice ?: return
+        val list = entries
+        viewModelScope.launch {
+            val remaining = withContext(Dispatchers.IO) {
+                SyncLock.mutex.withLock {
+                    for (name in AudioLogic.filesForOtherVoices(store.cachedAudioFiles(), list, voice)) {
+                        store.deleteAudioFile(name)
+                    }
+                    store.cachedAudioFiles()
+                }
+            }
+            cachedAudio = remaining
+            val loadedId = playerEntryId
+            val loadedVoice = playerVoice
+            if (loadedId != null && loadedVoice != null && AudioLogic.fileName(loadedId, loadedVoice) !in remaining) {
+                stopPlayback()
+            }
         }
     }
 
@@ -719,16 +787,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return voices.firstOrNull { it.id == voice }?.name?.takeIf { it.isNotBlank() } ?: voice
     }
 
-    /** The voices [entry] can be played in (for an archived entry only the cached ones). */
-    fun entryVoices(entry: Entry): List<AudioVariant> = AudioLogic.playableVariants(entry, cachedAudio)
+    /** What the player offers for [entry]: the Settings voice only (archived entries: what is cached). */
+    fun playerOffer(entry: Entry): PlayerOffer = AudioLogic.playerOffer(entry, selectedSettingsVoice, cachedAudio)
 
-    /** The voice [entry] plays in: chosen in the player, else preferred, else server default, else first. */
-    fun voiceFor(entry: Entry): String? {
-        val playable = entryVoices(entry)
-        val chosen = chosenVoices[entry.id]
-        if (chosen != null && playable.any { it.voice == chosen }) return chosen
-        return AudioLogic.pickVoice(playable, preferredVoice, serverDefaultVoice)
-    }
+    /** The voice [entry] plays in, or null when there is nothing to play. */
+    fun voiceFor(entry: Entry): String? = (playerOffer(entry) as? PlayerOffer.Play)?.voice
 
     /** Whether the audio [entry] would play (see [voiceFor]) is on the device. */
     fun isAudioCached(entry: Entry): Boolean {
@@ -747,38 +810,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return downloads[AudioLogic.fileName(entry.id, voice)]
     }
 
-    /**
-     * Switches [entry] to [voice]. When that entry is loaded in the player the track is switched
-     * (keeping the position); otherwise the voice is downloaded if it is not on the device yet.
-     */
-    fun chooseVoice(entry: Entry, voice: String) {
-        chosenVoices = chosenVoices + (entry.id to voice)
-        audioError = null
-        val p = player
-        if (p != null && playerEntryId == entry.id) {
-            if (playerVoice == voice) return
-            val position = p.currentPosition.coerceAtLeast(0L)
-            val wasPlaying = p.isPlaying
-            p.pause()
-            pendingPlay = entry.id to voice
-            viewModelScope.launch {
-                val ok = ensureAudio(entry, voice, reportErrors = true).await()
-                if (ok && pendingPlay == (entry.id to voice)) {
-                    pendingPlay = null
-                    startPlayback(entry.id, voice, position, wasPlaying)
-                }
-            }
-        } else {
-            ensureAudio(entry, voice, reportErrors = true)
-        }
-    }
-
     private fun startAutoDownload() {
         if (autoDownloadJob?.isActive == true) return
         autoDownloadJob = viewModelScope.launch {
             for (entry in entries.toList()) {
                 if (!autoDownload) break
-                val voice = voiceFor(entry) ?: continue
+                // Only the Settings voice; archived entries cannot be downloaded any more.
+                val voice = AudioLogic.voiceToKeep(entry, selectedSettingsVoice) ?: continue
                 if (AudioLogic.fileName(entry.id, voice) !in cachedAudio) {
                     val ok = ensureAudio(entry, voice, reportErrors = false).await()
                     // Do not hammer an unreachable server with one failing request per entry.
@@ -812,9 +850,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (downloads.containsKey(name)) downloads = downloads + (name to fraction)
                     }
                 }
-                // If a sync changed the audio while it was downloading, this copy is already stale.
-                val current = entryById(id)?.let { e -> AudioLogic.variants(e).firstOrNull { it.voice == voice } }
-                if (current == null || current.sha256 != variant.sha256) {
+                // Stale if a sync changed the audio, or the Settings voice changed, while it downloaded.
+                val currentEntry = entryById(id)
+                val current = currentEntry?.let { e -> AudioLogic.variants(e).firstOrNull { it.voice == voice } }
+                val stillWanted = currentEntry != null && AudioLogic.voiceToKeep(currentEntry, selectedSettingsVoice) == voice
+                if (current == null || current.sha256 != variant.sha256 || !stillWanted) {
                     withContext(Dispatchers.IO) { store.deleteAudioFile(name) }
                     false
                 } else {
@@ -1284,6 +1324,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 downloadedBibles = withContext(Dispatchers.IO) { bibleStore.downloaded() }
                 // A re-downloaded version must be parsed again.
                 if (openBible?.id == id) openBible = null
+                reportBibles()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1307,6 +1348,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bibleStore.delete(info.id)
                     bibleStore.downloaded()
                 }
+                reportBibles()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1360,6 +1402,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var appWallpaperId: String by mutableStateOf(settings.wallpaperId)
         private set
+    /** Opacity of the list item cards inside the text window, 0..1. */
+    var listItemOpacity: Float by mutableStateOf(WindowLogic.clampItemOpacity(settings.listItemOpacity))
+        private set
+
+    fun updateListItemOpacity(value: Float) {
+        val v = WindowLogic.clampItemOpacity(value)
+        listItemOpacity = v
+        settings.listItemOpacity = v
+    }
+
     /** Opacity of the text window over the app wallpaper, 0.5..1. */
     var windowOpacity: Float by mutableStateOf(WindowLogic.clampOpacity(settings.textWindowOpacity))
         private set

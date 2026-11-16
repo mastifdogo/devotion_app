@@ -42,6 +42,7 @@ import com.mastifdogo.devotion.Screen
 import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
+import com.mastifdogo.devotion.logic.PlayerOffer
 import java.time.ZoneId
 import java.util.Locale
 
@@ -129,7 +130,8 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab, cards: Boolean) {
                         entry = entry,
                         heading = EntryKinds.heading(entry, locale, zone),
                         audioCached = vm.isAudioCached(entry),
-                        audioAvailable = vm.entryVoices(entry).isNotEmpty(),
+                        audioAvailable = vm.playerOffer(entry) is PlayerOffer.Play,
+                        itemFill = itemCardFill(vm.listItemOpacity),
                         downloading = vm.isAudioDownloading(entry),
                         onClick = { vm.open(Screen.Detail(entry.id)) },
                     )
@@ -219,6 +221,7 @@ private fun EntryRow(
     heading: String?,
     audioCached: Boolean,
     audioAvailable: Boolean,
+    itemFill: Color,
     downloading: Boolean,
     onClick: () -> Unit,
 ) {
@@ -232,6 +235,7 @@ private fun EntryRow(
                     Modifier
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .clip(RoundedCornerShape(12.dp))
+                        .background(itemFill)
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                 } else {
                     Modifier
