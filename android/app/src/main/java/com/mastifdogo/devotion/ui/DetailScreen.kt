@@ -155,15 +155,33 @@ private fun DetailContent(
 
     if (entry.summary.isNotBlank()) {
         Spacer(modifier = Modifier.height(12.dp))
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = "Summary",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
+        val summary: @Composable () -> Unit = {
+            Text(
+                text = "Summary",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = entry.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (vm.appWallpaper != null) {
+            // Like the list item cards: the window's colour, the list item shade on top, an outline.
+            val shape = RoundedCornerShape(12.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(itemCardFill(vm.listItemShade))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+                    .padding(12.dp),
+            ) {
+                summary()
+            }
+        } else {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    summary()
+                }
             }
         }
     }
