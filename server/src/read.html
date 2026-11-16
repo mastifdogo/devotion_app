@@ -80,7 +80,6 @@ select option { background:var(--card); color:var(--ink); }
 .follow { padding:.3rem .7rem; border:1px solid var(--line); border-radius:8px; color:var(--ink); cursor:pointer; background:color-mix(in srgb, color-mix(in srgb, var(--win-bg), #000 calc(var(--shade) * 22%)) calc(var(--win) * 100%), transparent); }
 :root:not([data-wallpaper]) .follow { background:color-mix(in srgb, var(--bg), #000 calc(var(--shade) * 10%)); }
 .follow[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); font-weight:600; }
-.follow[aria-pressed="true"]::before { content:'✓ '; }
 .scrollctl { display:inline-flex; align-items:center; gap:.3rem; }
 .follow.step { min-width:2.1rem; padding:.3rem 0; text-align:center; font-weight:600; }
 .follow.step:disabled { opacity:.4; cursor:default; }
