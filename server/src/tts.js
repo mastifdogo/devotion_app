@@ -149,19 +149,31 @@ export class Tts {
 		return [];
 	}
 
-	/** Lessons read by the speech API while everything else is read by Piper. */
+	/** Whether entries of this kind are read by the speech API while Piper is the engine. */
+	premiumFor(kind) {
+		const key = kind === 'lesson' ? 'premium_lessons' : 'premium_readings';
+		return this.provider() === 'piper' && this.settings.get(key) === 'on' && this.settings.get('tts_openai_key') !== '';
+	}
+
+	/** Premium is on for lessons, daily readings, or both. */
 	premiumLessons() {
-		return this.provider() === 'piper' && this.settings.get('premium_lessons') === 'on' && this.settings.get('tts_openai_key') !== '';
+		return this.premiumFor('lesson') || this.premiumFor('daily_reading');
+	}
+
+	/** What the premium voice is used for now, to notice a change: "", "lessons", "readings" or "lessons+readings", with the voice. */
+	premiumState() {
+		const kinds = [this.premiumFor('lesson') && 'lessons', this.premiumFor('daily_reading') && 'readings'].filter(Boolean);
+		return kinds.length ? `${kinds.join('+')}:${this.premiumVoice().id}` : '';
 	}
 
 	premiumVoice() {
 		const voice = this.settings.get('tts_openai_voice');
-		return { id: openaiVoiceId(voice), name: `Premium (${voice})`, description: 'Speech service, lessons only', lessons_only: true };
+		return { id: openaiVoiceId(voice), name: `Premium (${voice})`, description: 'Speech service', lessons_only: true };
 	}
 
-	/** The voices this entry is made in: lessons only in the premium voice when that is on. */
+	/** The voices this entry is made in: only the premium voice where that is on for its kind. */
 	voicesFor(entry) {
-		if (this.premiumLessons() && entry.kind === 'lesson') return [this.premiumVoice()];
+		if (this.premiumFor(entry.kind)) return [this.premiumVoice()];
 		return this.voiceList();
 	}
 
@@ -172,7 +184,7 @@ export class Tts {
 
 	/** The voice a listener hears by default for this entry, given the voices it has audio in. */
 	preferredVoiceFor(entry, voiceIds) {
-		if (this.premiumLessons() && entry.kind === 'lesson' && voiceIds.includes(this.premiumVoice().id)) return this.premiumVoice().id;
+		if (this.premiumFor(entry.kind) && voiceIds.includes(this.premiumVoice().id)) return this.premiumVoice().id;
 		return this.defaultVoiceId();
 	}
 

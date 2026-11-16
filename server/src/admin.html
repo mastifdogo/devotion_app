@@ -162,12 +162,18 @@ section.off { display:none; }
 	</select>
 	<p class="small muted">Every entry is read in every voice on the server, and each person picks the voice they listen to in the app; the default voice is what they hear until they choose. A newly downloaded voice is made for existing entries in the background. A new pace applies to audio made from now on: use "Redo audio" on an entry to hear it on an existing one.</p>
 	<div data-for="piper">
-		<label for="premium_lessons">Lessons</label>
-		<select id="premium_lessons" data-setting style="max-width:26rem">
-			<option value="off">Read by the voices above, like daily readings</option>
-			<option value="on">Read by a premium voice from a speech API (lessons only)</option>
-		</select>
-		<p class="small muted" id="premium-note" hidden>Lessons are sent to the speech service below and read in its voice instead of the server's voices; daily readings stay on this server. Each lesson costs what the service charges for its length. Existing lessons get the premium voice in the background after you save; people hear it for lessons automatically.</p>
+		<label>Premium voice (from a speech API)</label>
+		<div class="grid">
+			<div><label for="premium_lessons">Lessons</label><select id="premium_lessons" data-setting>
+				<option value="off">Off: read by the voices above</option>
+				<option value="on">On: read by the premium voice</option>
+			</select></div>
+			<div><label for="premium_readings">Daily readings</label><select id="premium_readings" data-setting>
+				<option value="off">Off: read by the voices above</option>
+				<option value="on">On: read by the premium voice</option>
+			</select></div>
+		</div>
+		<p class="small muted" id="premium-note" hidden>What is switched on is sent to the speech service below and read in its voice instead of the server's voices; the rest stays on this server. Each entry costs what the service charges for its length. Existing entries get the premium voice in the background after you save, and people hear it for them automatically.</p>
 	</div>
 	<div data-for="openai" class="grid">
 		<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
@@ -321,8 +327,8 @@ function fillForm() {
 	showEngine();
 }
 function showEngine() {
-	const p = $('tts_provider').value, premium = p === 'piper' && $('premium_lessons').value === 'on';
-	// The speech API's settings are also needed for premium lessons.
+	const p = $('tts_provider').value, premium = p === 'piper' && ($('premium_lessons').value === 'on' || $('premium_readings').value === 'on');
+	// The speech API's settings are also needed for the premium voice.
 	for (const d of document.querySelectorAll('[data-for]')) d.hidden = d.dataset.for !== p && !(d.dataset.for === 'openai' && premium);
 	$('premium-note').hidden = !premium;
 }
@@ -484,6 +490,7 @@ $('password-form').onsubmit = act(async () => {
 $('logout').onclick = act(async () => { await api('/admin/api/logout', {}); showLogin(); });
 $('tts_provider').onchange = showEngine;
 $('premium_lessons').onchange = showEngine;
+$('premium_readings').onchange = showEngine;
 $('theme').value = document.documentElement.dataset.theme || 'auto';
 $('theme').onchange = () => {
 	const t = $('theme').value;

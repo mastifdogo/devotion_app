@@ -68,7 +68,7 @@ export function entryJson(row, audio = [], defaultVoice = '', serverDefault = de
 		summary: row.summary ?? '',
 		body: row.body,
 		references: parseRefs(row.refs),
-		// Where the listener's default differs from the server's (a premium voice for lessons).
+		// Where the listener's default differs from the server's (a premium voice for its kind).
 		preferred_voice: defaultVoice !== serverDefault && audio.some((a) => a.voice === defaultVoice) ? defaultVoice : null,
 		// How many characters the voice reads before the body (title, date, reference), for following along.
 		speech_offset: row.body ? speechText(row).length - row.body.length : 0,
@@ -475,13 +475,13 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	route('POST', /^\/admin\/api\/settings$/, async (req, res) => {
 		requireAdmin(req);
-		const premiumBefore = tts.premiumLessons?.() ? tts.premiumVoice().id : null;
+		const premiumBefore = tts.premiumState?.() ?? '';
 		settings.applyForm(await readJson(req));
-		const premiumNow = tts.premiumLessons?.() ? tts.premiumVoice().id : null;
+		const premiumNow = tts.premiumState?.() ?? '';
 		if (premiumNow !== premiumBefore) {
-			// Lessons change voice: apps re-read the entries, and missing audio is made in the background.
+			// Entries change voice: apps re-read the entries, and missing audio is made in the background.
 			pipeline.touchAll();
-			if (premiumNow) background(pipeline.fillAudio(), 'Premium lesson audio');
+			if (premiumNow) background(pipeline.fillAudio(), 'Premium audio');
 		}
 		send(res, 200, await adminState());
 	});

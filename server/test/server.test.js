@@ -277,7 +277,7 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.equal((await call(`/api/entries/${entry.id}/audio`)).status, 404);
 });
 
-test('premium speech for lessons only', async (t) => {
+test('premium speech for lessons, daily readings, or both', async (t) => {
 	const lesson = { title: 'Victory After Struggling', entry_date: '2026-11-08', scripture: null, summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
 	const reading = { title: 'Daily Bread', entry_date: '2026-11-15', scripture: null, summary: 'S.', body: 'Give us this day.', references: [] };
 	const { call, calls, connectGmail, settings } = await setup(t, {
@@ -318,6 +318,21 @@ test('premium speech for lessons only', async (t) => {
 	await call('/admin/api/settings', { body: { premium_lessons: 'off' } });
 	assert.equal((await entries()).find((e) => e.kind === 'lesson').preferred_voice, null);
 	assert.equal(settings.get('premium_lessons'), 'off');
+	assert.equal((await (await call('/api/voices')).json()).voices.length, 1);
+	// Daily readings only: the reading gets the premium voice, the lesson is back on the server's.
+	const speechBefore = calls.speech.length;
+	await call('/admin/api/settings', { body: { premium_readings: 'on' } });
+	await wait((l) => l.find((e) => e.kind === 'daily_reading').audio.length === 2);
+	list = await entries();
+	assert.deepEqual(list.map((e) => [e.kind, e.preferred_voice]).sort(), [['daily_reading', 'api-nova'], ['lesson', null]]);
+	assert.equal(calls.speech.length, speechBefore + 1);
+	assert.match(calls.speech.at(-1).body.input, /Daily Bread/);
+	// Both: nothing new to make (the lesson's premium audio is still there), and both prefer it.
+	await call('/admin/api/settings', { body: { premium_lessons: 'on', premium_readings: 'yes please' } });
+	list = await entries();
+	assert.deepEqual(list.map((e) => [e.kind, e.preferred_voice]).sort(), [['daily_reading', 'api-nova'], ['lesson', 'api-nova']]);
+	await new Promise((r) => setTimeout(r, 50));
+	assert.equal(calls.speech.length, speechBefore + 1);
 });
 
 test('a lesson is sorted from its subject, not by the model, and can be corrected by hand', async (t) => {
