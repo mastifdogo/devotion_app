@@ -49,6 +49,7 @@ import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
+import com.mastifdogo.devotion.logic.FollowLogic
 import com.mastifdogo.devotion.logic.MiniPlayerLogic
 import com.mastifdogo.devotion.logic.NowPlaying
 import com.mastifdogo.devotion.logic.PlayerOffer
@@ -411,6 +412,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateFollowAlong(value: Boolean) {
         followAlong = value
         settings.followAlong = value
+    }
+
+    /** Auto scroll speed in dp per second (one of FollowLogic.AUTO_SPEEDS). */
+    var autoScrollSpeed: Int by mutableStateOf(FollowLogic.sanitizeSpeed(settings.autoScrollSpeed))
+        private set
+
+    val canAutoScrollSlower: Boolean
+        get() = FollowLogic.canSlowDown(autoScrollSpeed)
+
+    val canAutoScrollFaster: Boolean
+        get() = FollowLogic.canSpeedUp(autoScrollSpeed)
+
+    fun stepAutoScrollSpeed(direction: Int) {
+        autoScrollSpeed = FollowLogic.stepSpeed(autoScrollSpeed, direction)
+        settings.autoScrollSpeed = autoScrollSpeed
     }
 
     /** Opens the "What's your name?" prompt and loads the existing profiles from the server. */

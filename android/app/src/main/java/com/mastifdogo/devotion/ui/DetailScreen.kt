@@ -42,8 +42,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +59,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +69,7 @@ import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.FollowLogic
 import com.mastifdogo.devotion.logic.ReminderLogic
+import com.mastifdogo.devotion.logic.ScrollMode
 import com.mastifdogo.devotion.logic.PlayerOffer
 import com.mastifdogo.devotion.logic.Passage
 import com.mastifdogo.devotion.logic.TextLogic
@@ -107,7 +111,6 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
     val geometry = remember(entry.id) { FollowGeometry() }
     val density = LocalDensity.current
     val bottomSlop = with(density) { 24.dp.roundToPx() }
-    val followThreshold = with(density) { 4.dp.roundToPx() }
 
     // ---- read tracking: open for 3 s and scrolled to the end (or the text fits) ---------------
     LaunchedEffect(entry.id) {
@@ -116,44 +119,110 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
         vm.markRead(entry.id)
     }
 
-    // ---- follow along -------------------------------------------------------------------------
-    // "following" is the snapped state of this screen; the saved preference decides how it starts.
+    // ---- follow along / auto scroll ------------------------------------------------------------
+    // While this entry's audio plays the button is "Follow"; otherwise it is "Auto scroll".
+    // "following" is the snapped state of Follow (the saved preference decides how it starts).
     var following by remember(entry.id) { mutableStateOf(vm.followAlong) }
+    var autoScrolling by remember(entry.id) { mutableStateOf(false) }
     val playingHere = vm.playerEntryId == entry.id && vm.isPlaying
+    val minFollowSpeed = with(density) { 6.dp.toPx() }
 
-    // Starting playback snaps again when the preference is on.
     LaunchedEffect(playingHere) {
-        if (playingHere && vm.followAlong) following = true
+        if (playingHere) {
+            // Audio started: auto scroll becomes Follow; the preference snaps as well.
+            if (autoScrolling) {
+                autoScrolling = false
+                following = true
+            } else if (vm.followAlong) {
+                following = true
+            }
+        }
+        // Playback stopped: following just stops moving (it does not turn into auto scroll).
     }
-    // A drag by hand (not our own animated scrolling) unsnaps; the button can snap it again.
+    // A drag by hand switches both off; the button switches them on again. Our own scrolling
+    // goes through dispatchRawDelta, which is not a drag and emits no interaction.
     LaunchedEffect(scroll) {
         scroll.interactionSource.interactions.collect { interaction ->
-            if (interaction is DragInteraction.Start) following = false
+            if (interaction is DragInteraction.Start) {
+                following = false
+                autoScrolling = false
+            }
         }
     }
+
+    // Follow: every frame glide toward the line being spoken (see FollowLogic.followDelta).
     LaunchedEffect(following, playingHere, entry.id) {
         if (!following || !playingHere) return@LaunchedEffect
+        var previousFrame = 0L
+        var carry = 0f
+        var target = -1
+        var targetAt = 0L
+        // The player reports its position only twice a second: run a clock in between.
+        var knownPosition = -1L
+        var knownAt = 0L
         while (true) {
-            val duration = vm.durationMs
-            val maxScroll = scroll.maxValue
-            if (duration > 0L && maxScroll != Int.MAX_VALUE) {
-                val offset = FollowLogic.spokenOffset(vm.positionMs, duration, entry.speechOffset, entry.body.length)
-                val lineY = locator.lineCenterY(offset)
-                if (lineY != null) {
-                    // The line's y in the scrolled content: the body's place in it plus the line.
-                    val bodyTop = (geometry.bodyRootY - geometry.viewportRootY).roundToInt() + scroll.value
-                    val target = FollowLogic.targetScroll(bodyTop + lineY, geometry.viewportHeight, maxScroll)
-                    if (FollowLogic.shouldScroll(scroll.value, target, followThreshold)) {
-                        try {
-                            scroll.animateScrollTo(target, tween(durationMillis = 500))
-                        } catch (e: CancellationException) {
-                            // The user's finger took over the scroll; stop only if this effect was cancelled.
-                            currentCoroutineContext().ensureActive()
-                        }
+            val now = withFrameNanos { it }
+            val seconds = FollowLogic.frameSeconds(previousFrame, now)
+            previousFrame = now
+            val reported = vm.positionMs
+            if (reported != knownPosition) {
+                knownPosition = reported
+                knownAt = now
+            }
+            // Where the spoken line should be: recomputed a few times a second.
+            if (target < 0 || now - targetAt > 200_000_000L) {
+                targetAt = now
+                val duration = vm.durationMs
+                val maxScroll = scroll.maxValue
+                if (duration > 0L && maxScroll != Int.MAX_VALUE) {
+                    val sinceReport = ((now - knownAt) / 1_000_000L).coerceIn(0L, 600L)
+                    val position = knownPosition + (sinceReport * vm.playbackSpeed).toLong()
+                    val offset = FollowLogic.spokenOffset(position, duration, entry.speechOffset, entry.body.length)
+                    val lineY = locator.lineCenterY(offset)
+                    if (lineY != null) {
+                        // The line's y in the scrolled content: the body's place in it plus the line.
+                        val bodyTop = (geometry.bodyRootY - geometry.viewportRootY).roundToInt() + scroll.value
+                        target = FollowLogic.targetScroll(bodyTop + lineY, geometry.viewportHeight, maxScroll)
                     }
                 }
             }
-            delay(300L)
+            if (target >= 0) {
+                val remaining = target - (scroll.value + carry)
+                val step = FollowLogic.step(carry, FollowLogic.followDelta(remaining, seconds, minFollowSpeed))
+                carry = step.carry
+                if (step.pixels != 0) scroll.dispatchRawDelta(step.pixels.toFloat())
+            }
+        }
+    }
+
+    // Auto scroll: a constant speed, every frame, from wherever the reader is to the bottom.
+    LaunchedEffect(autoScrolling, playingHere, entry.id) {
+        if (!autoScrolling || playingHere) return@LaunchedEffect
+        var previousFrame = 0L
+        var carry = 0f
+        while (true) {
+            val now = withFrameNanos { it }
+            val seconds = FollowLogic.frameSeconds(previousFrame, now)
+            previousFrame = now
+            if (FollowLogic.reachedEnd(scroll.value, scroll.maxValue)) {
+                // At the bottom: it switches itself off.
+                autoScrolling = false
+                break
+            }
+            val speed = with(density) { vm.autoScrollSpeed.dp.toPx() }
+            val step = FollowLogic.step(carry, FollowLogic.autoDelta(speed, seconds))
+            carry = step.carry
+            if (step.pixels != 0) scroll.dispatchRawDelta(step.pixels.toFloat())
+        }
+    }
+
+    // Keep the screen on only while the text is actually moving by itself.
+    val keepScreenOn = (following && playingHere) || (autoScrolling && !playingHere)
+    val view = LocalView.current
+    DisposableEffect(keepScreenOn) {
+        if (keepScreenOn) view.keepScreenOn = true
+        onDispose {
+            if (keepScreenOn) view.keepScreenOn = false
         }
     }
 
@@ -162,11 +231,14 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
             vm = vm,
             entry = entry,
             inWindow = inWindow,
+            mode = FollowLogic.modeFor(playingHere),
             following = following,
             onToggleFollow = {
                 following = !following
                 vm.updateFollowAlong(following)
             },
+            autoScrolling = autoScrolling,
+            onToggleAuto = { autoScrolling = !autoScrolling },
         )
     }
 
@@ -447,8 +519,11 @@ private fun PlayerBar(
     vm: MainViewModel,
     entry: Entry,
     inWindow: Boolean,
+    mode: ScrollMode,
     following: Boolean,
     onToggleFollow: () -> Unit,
+    autoScrolling: Boolean,
+    onToggleAuto: () -> Unit,
 ) {
     Surface(
         color = if (inWindow) Color.Transparent else MaterialTheme.colorScheme.surface,
@@ -484,8 +559,10 @@ private fun PlayerBar(
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 8.dp),
+                    modifier = Modifier.padding(vertical = 4.dp),
                 )
+                // No audio to play: a slim bar with just the auto-scroll control.
+                AutoScrollControl(vm, selected = autoScrolling, onClick = onToggleAuto)
                 return@Column
             }
             val voice = offer.voice
@@ -505,9 +582,16 @@ private fun PlayerBar(
                 } else {
                     Spacer(modifier = Modifier.size(1.dp))
                 }
-                // Between the voice and the speed: scroll the text along with the narration.
-                FollowButton(vm, selected = following, onClick = onToggleFollow)
+                // Between the voice and the speed, while playing: scroll along with the narration.
+                if (mode == ScrollMode.FOLLOW) {
+                    ScrollToggle(vm, ScrollMode.FOLLOW.label, selected = following, onClick = onToggleFollow)
+                }
                 SpeedControl(vm)
+            }
+            // Not playing: the same button is "Auto scroll" with its own − / +, on a row of its own
+            // (it does not fit beside the playback speed on a phone).
+            if (mode == ScrollMode.AUTO) {
+                AutoScrollControl(vm, selected = autoScrolling, onClick = onToggleAuto)
             }
 
             if (vm.isAudioDownloading(entry)) {
@@ -540,16 +624,16 @@ private fun PlayerBar(
     }
 }
 
-/** The "Follow" toggle, drawn as an item box like the speed indicator; outlined in primary when on. */
+/** The Follow / Auto scroll toggle, drawn as an item box like the speed indicator; outlined in primary when on. */
 @Composable
-private fun FollowButton(vm: MainViewModel, selected: Boolean, onClick: () -> Unit) {
+private fun ScrollToggle(vm: MainViewModel, label: String, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(8.dp)
     Box(
         // A 48dp-high touch target around the smaller box.
         modifier = Modifier
             .heightIn(min = 48.dp)
             .clickable(onClick = onClick)
-            .semantics { contentDescription = if (selected) "Follow along, on" else "Follow along, off" },
+            .semantics { contentDescription = if (selected) "$label, on" else "$label, off" },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -559,10 +643,33 @@ private fun FollowButton(vm: MainViewModel, selected: Boolean, onClick: () -> Un
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             Text(
-                text = if (selected) "\u2713 Follow" else "Follow",
+                // On is shown only by the primary outline and text colour (no check mark).
+                text = label,
                 style = MaterialTheme.typography.labelLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
+        }
+    }
+}
+
+/** "−  [Auto scroll]  +": the toggle, with slower/faster for the scroll speed (disabled at the ends). */
+@Composable
+private fun AutoScrollControl(vm: MainViewModel, selected: Boolean, onClick: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(
+            onClick = { vm.stepAutoScrollSpeed(-1) },
+            enabled = vm.canAutoScrollSlower,
+            modifier = Modifier.semantics { contentDescription = "Slower" },
+        ) {
+            Text("\u2212", style = MaterialTheme.typography.titleLarge)
+        }
+        ScrollToggle(vm, ScrollMode.AUTO.label, selected = selected, onClick = onClick)
+        IconButton(
+            onClick = { vm.stepAutoScrollSpeed(1) },
+            enabled = vm.canAutoScrollFaster,
+            modifier = Modifier.semantics { contentDescription = "Faster" },
+        ) {
+            Text("+", style = MaterialTheme.typography.titleLarge)
         }
     }
 }

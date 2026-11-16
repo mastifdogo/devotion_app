@@ -171,6 +171,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_FOLLOW, false)
         set(value) = prefs.edit().putBoolean(KEY_FOLLOW, value).apply()
 
+    /** Auto scroll speed, dp per second (default 22). */
+    var autoScrollSpeed: Int
+        get() = prefs.getInt(KEY_AUTO_SCROLL, 22)
+        set(value) = prefs.edit().putInt(KEY_AUTO_SCROLL, value).apply()
+
     /** "Remind me about unread readings" (default on). */
     var remindersEnabled: Boolean
         get() = prefs.getBoolean(KEY_REMIND, true)
@@ -244,6 +249,7 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_TOPICS = "wallpaper_topics_cache"
         const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
         const val KEY_FOLLOW = "follow_along"
+        const val KEY_AUTO_SCROLL = "auto_scroll_speed"
         const val KEY_REMIND = "reading_reminders"
         const val KEY_QUIET_FROM = "reminder_quiet_from"
         const val KEY_QUIET_UNTIL = "reminder_quiet_until"
