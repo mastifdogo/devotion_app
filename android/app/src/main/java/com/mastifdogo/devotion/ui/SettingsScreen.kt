@@ -73,51 +73,39 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: MainViewModel) {
-    val hasWallpaper = vm.appWallpaper != null
-    Scaffold(
-        containerColor = screenContainerColor(hasWallpaper),
-        contentColor = MaterialTheme.colorScheme.onBackground,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = { vm.back() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
-            )
-        },
-    ) { padding ->
-        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .imePadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                ServerSection(vm)
+    // No top bar: the Back bubble floats above the window and the title is a heading in it.
+    SubScreen(vm) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Text("Settings", style = MaterialTheme.typography.headlineSmall)
+            Spacer(modifier = Modifier.height(16.dp))
+            ServerSection(vm)
+            SectionDivider()
+            SyncSection(vm)
+            SectionDivider()
+            ReminderSection(vm)
+            SectionDivider()
+            ProfileSection(vm)
+            SectionDivider()
+            PlaybackSection(vm)
+            SectionDivider()
+            if (vm.voicesSupported) {
+                VoiceSection(vm)
                 SectionDivider()
-                SyncSection(vm)
-                SectionDivider()
-                ProfileSection(vm)
-                SectionDivider()
-                PlaybackSection(vm)
-                SectionDivider()
-                if (vm.voicesSupported) {
-                    VoiceSection(vm)
-                    SectionDivider()
-                }
-                AppearanceSection(vm)
-                SectionDivider()
-                WallpaperSection(vm)
-                SectionDivider()
-                CacheSection(vm)
-                SectionDivider()
-                UpdateSection(vm)
-                Spacer(modifier = Modifier.height(24.dp))
             }
+            AppearanceSection(vm)
+            SectionDivider()
+            WallpaperSection(vm)
+            SectionDivider()
+            CacheSection(vm)
+            SectionDivider()
+            UpdateSection(vm)
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
@@ -196,14 +184,66 @@ private fun SyncSection(vm: MainViewModel) {
 
 /** The platform time picker (stable on every Android version the app supports). */
 private fun showDailyTimePicker(context: Context, vm: MainViewModel) {
-    val minutes = vm.dailySyncMinutes
+    showTimePicker(context, vm.dailySyncMinutes) { hour, minute -> vm.updateDailySyncTime(hour, minute) }
+}
+
+private fun showTimePicker(context: Context, minutes: Int, onPicked: (Int, Int) -> Unit) {
     TimePickerDialog(
         context,
-        { _, hour, minute -> vm.updateDailySyncTime(hour, minute) },
+        { _, hour, minute -> onPicked(hour, minute) },
         minutes / 60,
         minutes % 60,
         DateFormat.is24HourFormat(context),
     ).show()
+}
+
+/** "From 21:00 [Change]   Until 07:00 [Change]". */
+@Composable
+private fun TimeRangeRow(
+    fromMinutes: Int,
+    untilMinutes: Int,
+    enabled: Boolean,
+    onFrom: (Int, Int) -> Unit,
+    onUntil: (Int, Int) -> Unit,
+) {
+    val context = LocalContext.current
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("From", style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = { showTimePicker(context, fromMinutes, onFrom) }, enabled = enabled) {
+            Text(SyncScheduleLogic.timeLabel(fromMinutes))
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("until", style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = { showTimePicker(context, untilMinutes, onUntil) }, enabled = enabled) {
+            Text(SyncScheduleLogic.timeLabel(untilMinutes))
+        }
+    }
+}
+
+/** The "today's reading is waiting" reminder and its quiet hours. */
+@Composable
+private fun ReminderSection(vm: MainViewModel) {
+    SectionTitle("Reminders")
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Remind me about unread readings", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = "A notification about every 15 minutes while the latest reading is unread.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = vm.remindersEnabled, onCheckedChange = { vm.updateRemindersEnabled(it) })
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+    Text("Quiet hours (no reminders)", style = MaterialTheme.typography.bodyMedium)
+    TimeRangeRow(
+        fromMinutes = vm.quietFromMinutes,
+        untilMinutes = vm.quietUntilMinutes,
+        enabled = vm.remindersEnabled,
+        onFrom = { hour, minute -> vm.updateQuietFrom(hour, minute) },
+        onUntil = { hour, minute -> vm.updateQuietUntil(hour, minute) },
+    )
 }
 
 @Composable
@@ -286,7 +326,8 @@ private fun ProfileSection(vm: MainViewModel) {
 @Composable
 private fun VoiceSection(vm: MainViewModel) {
     SectionTitle("Voice")
-    val voices = vm.voices
+    // Voices made only for lessons are used automatically for those and are not offered here.
+    val voices = vm.voices.filter { !it.lessonsOnly }
     if (voices.isEmpty()) {
         Text(
             text = "The server has no voices yet.",
@@ -437,6 +478,24 @@ private fun WallpaperSection(vm: MainViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+    if (vm.newWallpaperOnStart) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Prefer dark wallpapers in the evening",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = vm.darkWallpapersInEvening, onCheckedChange = { vm.updateDarkWallpapersInEvening(it) })
+        }
+        TimeRangeRow(
+            fromMinutes = vm.darkFromMinutes,
+            untilMinutes = vm.darkUntilMinutes,
+            enabled = vm.darkWallpapersInEvening,
+            onFrom = { hour, minute -> vm.updateDarkFrom(hour, minute) },
+            onUntil = { hour, minute -> vm.updateDarkUntil(hour, minute) },
+        )
     }
     Spacer(modifier = Modifier.height(8.dp))
     // The text window over the wallpaper: 50% (wallpaper shows through) to 100% (opaque).

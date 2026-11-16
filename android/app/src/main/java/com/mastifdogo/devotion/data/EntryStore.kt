@@ -169,6 +169,18 @@ class EntryStore(filesDir: File) {
     }
 }
 
+/**
+ * The cached entries as they are on disk, without touching anything (no audio clean-up): for
+ * background checks such as the reading reminder. Empty when there is no readable cache.
+ */
+fun readCachedEntries(filesDir: File): List<Entry> =
+    try {
+        val file = File(filesDir, "entries.json")
+        if (file.isFile) AppJson.decodeFromString(CacheFile.serializer(), file.readText()).entries else emptyList()
+    } catch (e: Exception) {
+        emptyList()
+    }
+
 /** Turns (bytesRead, total) callbacks into at most one callback per percent. */
 internal class ProgressThrottle(private val fallbackTotal: Long, private val onProgress: (Float?) -> Unit) {
     private var last = -1

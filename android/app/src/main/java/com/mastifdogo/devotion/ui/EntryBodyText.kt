@@ -65,6 +65,8 @@ fun EntryBodyText(
     scrollToOffset: Int? = null,
     scrollKey: Any? = null,
     onScrollTarget: (Int) -> Unit = {},
+    /** Filled in so the caller can ask where a body offset is drawn (for "follow along"). */
+    locator: BodyLocator? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val style = MaterialTheme.typography.bodyLarge
@@ -95,6 +97,16 @@ fun EntryBodyText(
             callbacks.onComment = onComment
             callbacks.onOpenAnnotation = onOpenAnnotation
             callbacks.onOpenLink = onOpenLink
+            locator?.resolve = { bodyOffset ->
+                val layout = view.layout
+                if (layout == null) {
+                    null
+                } else {
+                    val display = HighlightLogic.toDisplayStart(markers, bodyOffset).coerceIn(0, view.text.length)
+                    val line = layout.getLineForOffset(display)
+                    (layout.getLineTop(line) + layout.getLineBottom(line)) / 2 + view.totalPaddingTop
+                }
+            }
             view.setTextColor(textColor)
             view.setHighlightColor(selectionColor)
             view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
@@ -120,6 +132,17 @@ fun EntryBodyText(
             }
         },
     )
+}
+
+/**
+ * Lets the caller find where text is drawn: [lineCenterY] gives the y (pixels from the top of the
+ * body view) of the middle of the line holding a body offset, or null before the first layout.
+ * Comment markers inserted into the shown text are accounted for.
+ */
+class BodyLocator {
+    internal var resolve: (Int) -> Int? = { null }
+
+    fun lineCenterY(bodyOffset: Int): Int? = resolve(bodyOffset)
 }
 
 /** The latest data and callbacks, read by the view's listeners (which are created once). */

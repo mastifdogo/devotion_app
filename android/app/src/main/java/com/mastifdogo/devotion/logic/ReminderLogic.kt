@@ -69,11 +69,4 @@ object ReminderLogic {
      */
     fun isAtBottom(value: Int, maxValue: Int, slopPx: Int): Boolean =
         maxValue != Int.MAX_VALUE && value >= maxValue - slopPx.coerceAtLeast(0)
-
-    /** The read ids as stored: kept only for entries that still exist (plus [keep]). */
-    fun pruneRead(readIds: Set<Long>, entries: List<Entry>): Set<Long> {
-        if (entries.isEmpty()) return readIds
-        val known = entries.map { it.id }.toHashSet()
-        return readIds.filter { it in known }.toSet()
-    }
 }

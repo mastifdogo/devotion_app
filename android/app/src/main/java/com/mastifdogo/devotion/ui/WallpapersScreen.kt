@@ -63,24 +63,17 @@ import com.mastifdogo.devotion.logic.WallpaperLogic
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WallpapersScreen(vm: MainViewModel) {
-    val hasWallpaper = vm.appWallpaper != null
     val preview = vm.wallPreview
-    Scaffold(
-        containerColor = screenContainerColor(hasWallpaper),
-        contentColor = MaterialTheme.colorScheme.onBackground,
-        topBar = {
-            TopAppBar(
-                title = { Text(if (preview != null) "Wallpaper" else "Wallpapers") },
-                navigationIcon = {
-                    IconButton(onClick = { vm.back() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
-            )
-        },
-    ) { padding ->
-        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
+    // No top bar: the Back bubble floats above the window and the title is a heading in it.
+    SubScreen(vm) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (preview == null) {
+                Text(
+                    text = "Wallpapers",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                )
+            }
             val library = vm.wallLibrary
             when {
                 preview != null -> WallpaperPreview(vm, preview)

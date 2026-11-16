@@ -15,6 +15,7 @@ import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.ServerAddress
 import com.mastifdogo.devotion.logic.TextLogic
+import com.mastifdogo.devotion.reminder.ReadingReminder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
@@ -57,6 +58,8 @@ class BackgroundSync(context: Context) {
             }
             settings.lastSyncMillis = System.currentTimeMillis()
             settings.lastSyncError = ""
+            // A new latest reading may have arrived: remind about it without waiting for the next check.
+            ReadingReminder.evaluate(appContext)
             null
         } catch (e: CancellationException) {
             throw e

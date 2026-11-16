@@ -148,4 +148,44 @@ class AudioLogicTest {
         )
         assertTrue(AudioLogic.filesForOtherVoices(cached, entries, null).isEmpty())
     }
+
+    // ---- the entry's own (preferred) voice ----------------------------------------------------
+
+    private val premium = AudioVariant("premium-lesson-voice", 300, "cc")
+
+    private fun lesson(audio: List<AudioVariant>, preferred: String?, archived: Boolean = false) =
+        Entry(id = 20, hasAudio = true, audioBytes = 100, audioSha256 = "aa", audio = audio, preferredVoice = preferred, archived = archived)
+
+    @Test
+    fun preferredVoice_winsOverTheSettingsVoiceWhenTheEntryHasIt() {
+        val e = lesson(listOf(amy, joe, premium), "premium-lesson-voice")
+        assertEquals("premium-lesson-voice", AudioLogic.preferredVoice(e))
+        assertEquals("premium-lesson-voice", AudioLogic.voiceToKeep(e, JOE))
+        assertEquals("premium-lesson-voice", AudioLogic.voiceToKeep(e, null))
+        assertEquals(PlayerOffer.Play("premium-lesson-voice", false), AudioLogic.playerOffer(e, JOE, emptySet()))
+        // The Settings voice's file of that entry is "another voice" and goes; the preferred one stays.
+        val cached = listOf("20-premium-lesson-voice.mp3", "20-en_US-joe-medium.mp3")
+        assertEquals(listOf("20-en_US-joe-medium.mp3"), AudioLogic.filesForOtherVoices(cached, listOf(e), JOE))
+    }
+
+    @Test
+    fun preferredVoice_ignoredWhenTheEntryDoesNotHaveIt() {
+        // Not (yet) in the audio list: the Settings voice as usual.
+        val notYet = lesson(listOf(amy, joe), "premium-lesson-voice")
+        assertNull(AudioLogic.preferredVoice(notYet))
+        assertEquals(JOE, AudioLogic.voiceToKeep(notYet, JOE))
+        assertEquals(PlayerOffer.Play(JOE, false), AudioLogic.playerOffer(notYet, JOE, emptySet()))
+        // No preference at all, or an empty one.
+        assertNull(AudioLogic.preferredVoice(lesson(listOf(amy, premium), null)))
+        assertNull(AudioLogic.preferredVoice(lesson(listOf(amy, premium), "")))
+        assertEquals(AMY, AudioLogic.voiceToKeep(lesson(listOf(amy, premium), null), AMY))
+    }
+
+    @Test
+    fun preferredVoice_archivedEntryPlaysItWhenCached() {
+        val e = lesson(listOf(amy, joe, premium), "premium-lesson-voice", archived = true)
+        val cached = setOf("20-premium-lesson-voice.mp3", "20-en_US-joe-medium.mp3")
+        assertEquals(PlayerOffer.Play("premium-lesson-voice", false), AudioLogic.playerOffer(e, JOE, cached))
+        assertEquals(PlayerOffer.Play(JOE, false), AudioLogic.playerOffer(e, JOE, setOf("20-en_US-joe-medium.mp3")))
+    }
 }

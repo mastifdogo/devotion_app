@@ -154,4 +154,85 @@ class WallpaperLogicTest {
         assertEquals(emptyList<WallTopic>(), WallpaperLogic.decodeTopics(""))
         assertEquals(listOf(WallTopic("x", "x", 0)), WallpaperLogic.decodeTopics("x\n\tnoid\nx\tdup"))
     }
+
+    // ---- dark wallpapers ------------------------------------------------------------------------
+
+    private fun wall(id: String, vararg colors: String, topic: String = "t") =
+        ServerWallpaper(id, topic, null, null, null, null, null, null, colors.mapNotNull { WallpaperLogic.parseColor(it) })
+
+    @Test
+    fun luminanceAndDarkness() {
+        assertEquals(0.0, WallpaperLogic.relativeLuminance(0xFF000000.toInt()), 1e-9)
+        assertEquals(1.0, WallpaperLogic.relativeLuminance(0xFFFFFFFF.toInt()), 1e-9)
+        assertEquals(0.2126, WallpaperLogic.relativeLuminance(0xFFFF0000.toInt()), 1e-4)
+        assertTrue(WallpaperLogic.isDark(wall("night", "#0b1026", "#1c2541", "#3a506b")))
+        assertFalse(WallpaperLogic.isDark(wall("day", "#f5f0e1", "#c9d6df", "#52616b")))
+        // The first colours dominate: dark first with one bright accent is still dark...
+        assertTrue(WallpaperLogic.isDark(wall("accent", "#101010", "#151515", "#181818", "#ffffff")))
+        // ...and bright first with a dark accent is not.
+        assertFalse(WallpaperLogic.isDark(wall("bright", "#ffffff", "#f0f0f0", "#eeeeee", "#000000")))
+        // Unknown colours: not counted as dark.
+        assertFalse(WallpaperLogic.isDark(wall("unknown")))
+        assertNull(WallpaperLogic.meanLuminance(emptyList()))
+        // Weights 2 and 1: (2 * 1.0 + 1 * 0.0) / 3.
+        assertEquals(2.0 / 3.0, WallpaperLogic.meanLuminance(listOf(0xFFFFFFFF.toInt(), 0xFF000000.toInt()))!!, 1e-9)
+    }
+
+    @Test
+    fun parseLibrary_keepsAllColours() {
+        val lib = WallpaperLogic.parseLibrary("""{"wallpapers":[{"id":"a","colors":["#000000","bad","#ffffff"]}]}""")
+        assertEquals(listOf(0xFF000000.toInt(), 0xFFFFFFFF.toInt()), lib.wallpapers[0].colors)
+        assertEquals(0xFF000000.toInt(), lib.wallpapers[0].color)
+    }
+
+    @Test
+    fun pickRandom_darkOnlyFallsBackToAll() {
+        val topics = listOf(WallTopic("t", "T", 3))
+        val mixed = WallpaperLibrary(topics, listOf(wall("night", "#050505"), wall("day", "#ffffff"), wall("dusk", "#101820")))
+        val seen = HashSet<String>()
+        repeat(60) { seed -> WallpaperLogic.pickRandom(mixed, null, null, Random(seed), darkOnly = true)?.let { seen.add(it.id) } }
+        assertEquals(setOf("night", "dusk"), seen)
+        // Avoids the current one among the dark ones.
+        repeat(20) { seed -> assertEquals("dusk", WallpaperLogic.pickRandom(mixed, null, "night", Random(seed), darkOnly = true)?.id) }
+        // No dark wallpaper at all: any of them.
+        val bright = WallpaperLibrary(topics, listOf(wall("day", "#ffffff"), wall("noon", "#eeeeee")))
+        assertTrue(WallpaperLogic.pickRandom(bright, null, null, Random(1), darkOnly = true) != null)
+        // Not asked for: unchanged behaviour.
+        val all = HashSet<String>()
+        repeat(60) { seed -> WallpaperLogic.pickRandom(mixed, null, null, Random(seed))?.let { all.add(it.id) } }
+        assertEquals(setOf("night", "day", "dusk"), all)
+    }
+
+    // ---- random crop ----------------------------------------------------------------------------
+
+    @Test
+    fun cropRect_wideImageKeepsFullHeightAndMovesWithTheBias() {
+        // A 4000x2000 image on a 1000x2000 screen: scale 1, 1000 of 4000 px wide are visible.
+        assertEquals(CropRect(0f, 0f, 1000f, 2000f), WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 0f))
+        assertEquals(CropRect(1500f, 0f, 2500f, 2000f), WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 0.5f))
+        assertEquals(CropRect(3000f, 0f, 4000f, 2000f), WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 1f))
+        // Scaled: 1920x1080 on 1080x2160 -> scale 2, 540 px wide visible, full height.
+        val r = WallpaperLogic.cropRect(1920, 1080, 1080, 2160, 0.25f)
+        assertEquals(345f, r.left, 0.01f)
+        assertEquals(885f, r.right, 0.01f)
+        assertEquals(0f, r.top, 0f)
+        assertEquals(1080f, r.bottom, 0f)
+        // Out-of-range bias is clamped; NaN is the centre.
+        assertEquals(WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 1f), WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 9f))
+        assertEquals(WallpaperLogic.cropRect(4000, 2000, 1000, 2000, 0.5f), WallpaperLogic.cropRect(4000, 2000, 1000, 2000, Float.NaN))
+    }
+
+    @Test
+    fun cropRect_tallOrMatchingImageIgnoresTheBias() {
+        // Taller than the screen: full width, centred vertically, whatever the bias.
+        assertEquals(CropRect(0f, 500f, 1000f, 2500f), WallpaperLogic.cropRect(1000, 3000, 1000, 2000, 0f))
+        assertEquals(CropRect(0f, 500f, 1000f, 2500f), WallpaperLogic.cropRect(1000, 3000, 1000, 2000, 1f))
+        // Same shape: everything is visible.
+        assertEquals(CropRect(0f, 0f, 1080f, 1920f), WallpaperLogic.cropRect(1080, 1920, 540, 960, 0.8f))
+        assertEquals(CropRect(0f, 0f, 0f, 0f), WallpaperLogic.cropRect(0, 0, 100, 100, 0.5f))
+        assertEquals(-1f, WallpaperLogic.alignmentBias(0f), 0f)
+        assertEquals(0f, WallpaperLogic.alignmentBias(0.5f), 0f)
+        assertEquals(1f, WallpaperLogic.alignmentBias(1f), 0f)
+        assertEquals(0f, WallpaperLogic.alignmentBias(Float.NaN), 0f)
+    }
 }

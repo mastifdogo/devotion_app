@@ -164,6 +164,45 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, value).apply()
 
+    // ---- follow along, reminders, evening wallpapers ------------------------------------------
+
+    /** "Follow" in the audio bar: scroll the text along with the narration (default off). */
+    var followAlong: Boolean
+        get() = prefs.getBoolean(KEY_FOLLOW, false)
+        set(value) = prefs.edit().putBoolean(KEY_FOLLOW, value).apply()
+
+    /** "Remind me about unread readings" (default on). */
+    var remindersEnabled: Boolean
+        get() = prefs.getBoolean(KEY_REMIND, true)
+        set(value) = prefs.edit().putBoolean(KEY_REMIND, value).apply()
+
+    /** No reminders from/until these times, minutes after midnight (default 21:00–07:00). */
+    var quietFromMinutes: Int
+        get() = prefs.getInt(KEY_QUIET_FROM, 21 * 60)
+        set(value) = prefs.edit().putInt(KEY_QUIET_FROM, value).apply()
+
+    var quietUntilMinutes: Int
+        get() = prefs.getInt(KEY_QUIET_UNTIL, 7 * 60)
+        set(value) = prefs.edit().putInt(KEY_QUIET_UNTIL, value).apply()
+
+    /** "Prefer dark wallpapers in the evening" (default off) and its window (default 19:00–07:00). */
+    var darkWallpapersInEvening: Boolean
+        get() = prefs.getBoolean(KEY_DARK_EVENING, false)
+        set(value) = prefs.edit().putBoolean(KEY_DARK_EVENING, value).apply()
+
+    var darkFromMinutes: Int
+        get() = prefs.getInt(KEY_DARK_FROM, 19 * 60)
+        set(value) = prefs.edit().putInt(KEY_DARK_FROM, value).apply()
+
+    var darkUntilMinutes: Int
+        get() = prefs.getInt(KEY_DARK_UNTIL, 7 * 60)
+        set(value) = prefs.edit().putInt(KEY_DARK_UNTIL, value).apply()
+
+    /** Horizontal crop of the app wallpaper: 0 = left edge, 0.5 = centre, 1 = right edge. */
+    var wallpaperBias: Float
+        get() = prefs.getFloat(KEY_WALL_BIAS, 0.5f)
+        set(value) = prefs.edit().putFloat(KEY_WALL_BIAS, value).apply()
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -204,6 +243,14 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_START_TOPIC = "wallpaper_start_topic"
         const val KEY_WALL_TOPICS = "wallpaper_topics_cache"
         const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
+        const val KEY_FOLLOW = "follow_along"
+        const val KEY_REMIND = "reading_reminders"
+        const val KEY_QUIET_FROM = "reminder_quiet_from"
+        const val KEY_QUIET_UNTIL = "reminder_quiet_until"
+        const val KEY_DARK_EVENING = "wallpaper_dark_evening"
+        const val KEY_DARK_FROM = "wallpaper_dark_from"
+        const val KEY_DARK_UNTIL = "wallpaper_dark_until"
+        const val KEY_WALL_BIAS = "wallpaper_bias"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"

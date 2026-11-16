@@ -29,13 +29,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.util.Consumer
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mastifdogo.devotion.ui.DetailScreen
 import com.mastifdogo.devotion.ui.DevotionTheme
+import com.mastifdogo.devotion.logic.WallpaperLogic
 import com.mastifdogo.devotion.playback.PlaybackService
+import com.mastifdogo.devotion.reminder.ReadingReminder
 import com.mastifdogo.devotion.ui.ListScreen
 import com.mastifdogo.devotion.ui.MiniPlayer
 import com.mastifdogo.devotion.ui.ProfileDialog
@@ -47,11 +50,20 @@ class MainActivity : ComponentActivity() {
     /** Set when the media notification was tapped: open the entry that is playing. */
     private val openPlayingRequest = mutableStateOf(false)
 
+    /** Set when the reading reminder was tapped: the id of the entry to open (-1 = none). */
+    private val openEntryRequest = mutableStateOf(-1L)
+
     private fun noteOpenPlaying(intent: Intent?) {
-        if (intent != null && intent.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYING, false)) {
+        if (intent == null) return
+        if (intent.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYING, false)) {
             // Only once: a recreated activity (rotation) must not jump to the entry again.
             intent.removeExtra(PlaybackService.EXTRA_OPEN_PLAYING)
             openPlayingRequest.value = true
+        }
+        val entryId = intent.getLongExtra(ReadingReminder.EXTRA_OPEN_ENTRY, -1L)
+        if (entryId >= 0L) {
+            intent.removeExtra(ReadingReminder.EXTRA_OPEN_ENTRY)
+            openEntryRequest.value = entryId
         }
     }
 
@@ -69,6 +81,14 @@ class MainActivity : ComponentActivity() {
                 if (openPlayingRequest.value) {
                     openPlayingRequest.value = false
                     vm.openPlayingEntry()
+                }
+            }
+
+            LaunchedEffect(openEntryRequest.value) {
+                val entryId = openEntryRequest.value
+                if (entryId >= 0L) {
+                    openEntryRequest.value = -1L
+                    vm.openEntryById(entryId)
                 }
             }
 
@@ -147,6 +167,9 @@ private fun AppBackground(vm: MainViewModel, content: @Composable () -> Unit) {
                     bitmap = wallpaper,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    // A wallpaper wider than the screen keeps its full height and shows the
+                    // horizontal crop chosen with it (centre for one picked by hand).
+                    alignment = BiasAlignment(WallpaperLogic.alignmentBias(vm.wallpaperBias), 0f),
                     modifier = Modifier.fillMaxSize(),
                 )
             }

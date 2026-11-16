@@ -108,11 +108,6 @@ fun highlightColor(name: String?, dark: Boolean): Color? = when (name) {
 fun screenContainerColor(hasWallpaper: Boolean): Color =
     if (hasWallpaper) Color.Transparent else MaterialTheme.colorScheme.background
 
-/** Top app bar over the wallpaper: lightly translucent so its title and icons stay legible. */
-@Composable
-fun barContainerColor(hasWallpaper: Boolean): Color =
-    if (hasWallpaper) MaterialTheme.colorScheme.surface.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surface
-
 /**
  * The window's colour. Light theme: surface. Dark theme: surfaceContainerHigh, because surface is
  * nearly black there and a darker shade on it would be invisible (the website's dark window is

@@ -2,7 +2,9 @@ package com.mastifdogo.devotion.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +54,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,11 +64,26 @@ import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.logic.EntryKinds
+import com.mastifdogo.devotion.logic.FollowLogic
+import com.mastifdogo.devotion.logic.ReminderLogic
 import com.mastifdogo.devotion.logic.PlayerOffer
 import com.mastifdogo.devotion.logic.Passage
 import com.mastifdogo.devotion.logic.TextLogic
 import java.time.ZoneId
+import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import java.util.Locale
+
+/** Where the scroll viewport and the body text are on screen (plain fields: read by the follow loop, not by composition). */
+private class FollowGeometry {
+    var viewportRootY: Float = 0f
+    var viewportHeight: Int = 0
+    var bodyRootY: Float = 0f
+}
 
 /** The range whose highlight/comment dialog is open, and the annotation already on it (if any). */
 private class EditTarget(val passage: Passage, val existing: Annotation?)
@@ -79,49 +102,103 @@ fun DetailScreen(vm: MainViewModel, entry: Entry) {
     var editing by remember(entry.id) { mutableStateOf<EditTarget?>(null) }
     val dark = isAppInDarkTheme()
     val hasWallpaper = vm.appWallpaper != null
+    val scroll = rememberScrollState()
+    val locator = remember(entry.id) { BodyLocator() }
+    val geometry = remember(entry.id) { FollowGeometry() }
+    val density = LocalDensity.current
+    val bottomSlop = with(density) { 24.dp.roundToPx() }
+    val followThreshold = with(density) { 4.dp.roundToPx() }
 
-    Scaffold(
-        containerColor = screenContainerColor(hasWallpaper),
-        contentColor = MaterialTheme.colorScheme.onBackground,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = entry.title.ifBlank { "Devotion" },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { vm.back() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    // ---- read tracking: open for 3 s and scrolled to the end (or the text fits) ---------------
+    LaunchedEffect(entry.id) {
+        delay(3000L)
+        snapshotFlow { ReminderLogic.isAtBottom(scroll.value, scroll.maxValue, bottomSlop) }.first { it }
+        vm.markRead(entry.id)
+    }
+
+    // ---- follow along -------------------------------------------------------------------------
+    // "following" is the snapped state of this screen; the saved preference decides how it starts.
+    var following by remember(entry.id) { mutableStateOf(vm.followAlong) }
+    val playingHere = vm.playerEntryId == entry.id && vm.isPlaying
+
+    // Starting playback snaps again when the preference is on.
+    LaunchedEffect(playingHere) {
+        if (playingHere && vm.followAlong) following = true
+    }
+    // A drag by hand (not our own animated scrolling) unsnaps; the button can snap it again.
+    LaunchedEffect(scroll) {
+        scroll.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) following = false
+        }
+    }
+    LaunchedEffect(following, playingHere, entry.id) {
+        if (!following || !playingHere) return@LaunchedEffect
+        while (true) {
+            val duration = vm.durationMs
+            val maxScroll = scroll.maxValue
+            if (duration > 0L && maxScroll != Int.MAX_VALUE) {
+                val offset = FollowLogic.spokenOffset(vm.positionMs, duration, entry.speechOffset, entry.body.length)
+                val lineY = locator.lineCenterY(offset)
+                if (lineY != null) {
+                    // The line's y in the scrolled content: the body's place in it plus the line.
+                    val bodyTop = (geometry.bodyRootY - geometry.viewportRootY).roundToInt() + scroll.value
+                    val target = FollowLogic.targetScroll(bodyTop + lineY, geometry.viewportHeight, maxScroll)
+                    if (FollowLogic.shouldScroll(scroll.value, target, followThreshold)) {
+                        try {
+                            scroll.animateScrollTo(target, tween(durationMillis = 500))
+                        } catch (e: CancellationException) {
+                            // The user's finger took over the scroll; stop only if this effect was cancelled.
+                            currentCoroutineContext().ensureActive()
+                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = barContainerColor(hasWallpaper)),
-            )
-        },
-        // Without a wallpaper the player is the bottom bar; with one it moves into the text window.
-        bottomBar = { if (!hasWallpaper) PlayerBar(vm, entry, inWindow = false) },
-    ) { padding ->
-        ContentWindow(hasWallpaper, vm.windowOpacity, Modifier.padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                ) {
-                    DetailContent(
-                        vm = vm,
-                        entry = entry,
-                        annotations = annotations,
-                        dark = dark,
-                        onEdit = { target -> editing = target },
-                    )
                 }
-                if (hasWallpaper) PlayerBar(vm, entry, inWindow = true)
             }
+            delay(300L)
+        }
+    }
+
+    val playerBar: @Composable (Boolean) -> Unit = { inWindow ->
+        PlayerBar(
+            vm = vm,
+            entry = entry,
+            inWindow = inWindow,
+            following = following,
+            onToggleFollow = {
+                following = !following
+                vm.updateFollowAlong(following)
+            },
+        )
+    }
+
+    SubScreen(
+        vm = vm,
+        // Without a wallpaper the player is the bottom bar; with one it moves into the text window.
+        bottomBar = { if (!hasWallpaper) playerBar(false) },
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    // The viewport (before scrolling): where it is and how high.
+                    .onGloballyPositioned {
+                        geometry.viewportRootY = it.positionInRoot().y
+                        geometry.viewportHeight = it.size.height
+                    }
+                    .verticalScroll(scroll)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+            ) {
+                DetailContent(
+                    vm = vm,
+                    entry = entry,
+                    annotations = annotations,
+                    dark = dark,
+                    locator = locator,
+                    geometry = geometry,
+                    onEdit = { target -> editing = target },
+                )
+            }
+            if (hasWallpaper) playerBar(true)
         }
     }
 
@@ -157,6 +234,8 @@ private fun DetailContent(
     entry: Entry,
     annotations: List<Annotation>,
     dark: Boolean,
+    locator: BodyLocator,
+    geometry: FollowGeometry,
     onEdit: (EditTarget) -> Unit,
 ) {
     Header(vm, entry)
@@ -212,7 +291,10 @@ private fun DetailContent(
             },
             onOpenAnnotation = { annotation -> onEdit(EditTarget(Passage(annotation.start, annotation.end), annotation)) },
             onOpenLink = { index -> references.getOrNull(index)?.let { vm.openBibleReference(it) } },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { geometry.bodyRootY = it.positionInRoot().y },
+            locator = locator,
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
@@ -361,7 +443,13 @@ private fun NotesSection(
  * the window's colour at the window's opacity, with a divider above it.
  */
 @Composable
-private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
+private fun PlayerBar(
+    vm: MainViewModel,
+    entry: Entry,
+    inWindow: Boolean,
+    following: Boolean,
+    onToggleFollow: () -> Unit,
+) {
     Surface(
         color = if (inWindow) Color.Transparent else MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -417,6 +505,8 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
                 } else {
                     Spacer(modifier = Modifier.size(1.dp))
                 }
+                // Between the voice and the speed: scroll the text along with the narration.
+                FollowButton(vm, selected = following, onClick = onToggleFollow)
                 SpeedControl(vm)
             }
 
@@ -447,6 +537,33 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
             }
         }
       }
+    }
+}
+
+/** The "Follow" toggle, drawn as an item box like the speed indicator; outlined in primary when on. */
+@Composable
+private fun FollowButton(vm: MainViewModel, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        // A 48dp-high touch target around the smaller box.
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = if (selected) "Follow along, on" else "Follow along, off" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .then(itemCardModifier(vm.appWallpaper != null, vm.windowOpacity, vm.listItemShade, shape))
+                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape) else Modifier)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = if (selected) "\u2713 Follow" else "Follow",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 

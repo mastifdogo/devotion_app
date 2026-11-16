@@ -129,6 +129,7 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab) {
                 items(entries, key = { it.id }) { entry ->
                     EntryRow(
                         card = card,
+                        read = entry.id in vm.readIds,
                         entry = entry,
                         heading = EntryKinds.heading(entry, locale, zone),
                         audioCached = vm.isAudioCached(entry),
@@ -217,6 +218,7 @@ private fun EmptyState(vm: MainViewModel, tab: EntryTab) {
 @Composable
 private fun EntryRow(
     card: Modifier,
+    read: Boolean,
     entry: Entry,
     heading: String?,
     audioCached: Boolean,
@@ -290,6 +292,8 @@ private fun EntryRow(
             val labels = listOfNotNull(
                 EntryKinds.dailyLessonLabel(entry),
                 if (entry.archived) "Archived" else null,
+                // A small, unobtrusive mark for entries that have been read or listened to.
+                if (read) "\u2713 Read" else null,
             )
             if (labels.isNotEmpty()) {
                 Text(

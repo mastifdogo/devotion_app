@@ -36,6 +36,7 @@ import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.data.EntryReference
 import com.mastifdogo.devotion.data.EntryStore
 import com.mastifdogo.devotion.data.Profile
+import com.mastifdogo.devotion.data.ReadStore
 import com.mastifdogo.devotion.data.SettingsStore
 import com.mastifdogo.devotion.data.StoredAnnotation
 import com.mastifdogo.devotion.data.SyncLock
@@ -55,6 +56,7 @@ import com.mastifdogo.devotion.logic.ServerAddress
 import com.mastifdogo.devotion.logic.ServerWallpaper
 import com.mastifdogo.devotion.logic.SyncScheduleLogic
 import com.mastifdogo.devotion.logic.TextLogic
+import com.mastifdogo.devotion.logic.TimeWindow
 import com.mastifdogo.devotion.logic.WallTopic
 import com.mastifdogo.devotion.logic.WallpaperLibrary
 import com.mastifdogo.devotion.logic.WallpaperLogic
@@ -64,10 +66,12 @@ import com.mastifdogo.devotion.update.ReleaseAsset
 import com.mastifdogo.devotion.update.UpdateCheck
 import com.mastifdogo.devotion.update.UpdateLogic
 import com.mastifdogo.devotion.playback.PlaybackService
+import com.mastifdogo.devotion.reminder.ReadingReminder
 import com.mastifdogo.devotion.sync.SyncScheduler
 import com.mastifdogo.devotion.update.Updater
 import coil.ImageLoader
 import java.io.File
+import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
@@ -117,6 +121,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val api = ApiClient()
     private val updater = Updater(application.cacheDir)
     private val wallpaperStore = WallpaperStore(application.filesDir)
+    private val readStore = ReadStore(application.filesDir)
 
     // ---- navigation -------------------------------------------------------------------------
 
@@ -314,7 +319,98 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             annotations = file.annotations
             annotationServerTime = file.serverTime
         }
+        // Read marks are kept per server and profile (profile 0 while none is chosen).
+        readIds = if (isServerConfigured) readStore.load(key, stored?.id ?: 0L) else emptySet()
         loadVoiceContext()
+    }
+
+    // ---- read tracking and the reading reminder -----------------------------------------------
+
+    /** Ids of the entries that count as read (scrolled to the end, or listened to the end). */
+    var readIds: Set<Long> by mutableStateOf(emptySet())
+        private set
+
+    var remindersEnabled: Boolean by mutableStateOf(settings.remindersEnabled)
+        private set
+    /** No reminders between these times (minutes after midnight). */
+    var quietFromMinutes: Int by mutableStateOf(SyncScheduleLogic.normalizeMinutes(settings.quietFromMinutes))
+        private set
+    var quietUntilMinutes: Int by mutableStateOf(SyncScheduleLogic.normalizeMinutes(settings.quietUntilMinutes))
+        private set
+
+    fun markRead(entryId: Long) {
+        if (entryId in readIds || !isServerConfigured) return
+        val updated = readIds + entryId
+        readIds = updated
+        try {
+            readStore.save(serverKey, profile?.id ?: 0L, updated)
+        } catch (e: Exception) {
+            // Kept in memory; written again with the next entry read.
+        }
+        // Removes the reminder at once if this was the entry it was about.
+        refreshReminder()
+    }
+
+    /** Re-evaluates the reminder from what is on disk (posts, replaces or removes it). */
+    private fun refreshReminder() {
+        val app = getApplication<Application>()
+        viewModelScope.launch { withContext(Dispatchers.IO) { ReadingReminder.evaluate(app) } }
+    }
+
+    private fun scheduleReminder() {
+        try {
+            ReadingReminder.schedule(getApplication())
+        } catch (e: Exception) {
+            // WorkManager unavailable: no reminders, nothing else is affected.
+        }
+    }
+
+    fun updateRemindersEnabled(value: Boolean) {
+        remindersEnabled = value
+        settings.remindersEnabled = value
+        scheduleReminder()
+        if (value) {
+            requestNotificationPermission()
+            refreshReminder()
+        }
+    }
+
+    fun updateQuietFrom(hour: Int, minute: Int) {
+        quietFromMinutes = SyncScheduleLogic.normalizeMinutes(hour * 60 + minute)
+        settings.quietFromMinutes = quietFromMinutes
+        refreshReminder()
+    }
+
+    fun updateQuietUntil(hour: Int, minute: Int) {
+        quietUntilMinutes = SyncScheduleLogic.normalizeMinutes(hour * 60 + minute)
+        settings.quietUntilMinutes = quietUntilMinutes
+        refreshReminder()
+    }
+
+    /** Asks for the notification permission (Android 13+) when it is missing. */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted = ContextCompat.checkSelfPermission(getApplication<Application>(), POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        settings.notificationPermissionAsked = true
+        askNotificationPermission = true
+    }
+
+    /** Opens an entry by id (the reading reminder was tapped). */
+    fun openEntryById(entryId: Long) {
+        if (entryById(entryId) != null) screen = Screen.Detail(entryId)
+    }
+
+    // ---- follow along -------------------------------------------------------------------------
+
+    /** The "Follow" preference: entries start following the narration when it is on. */
+    var followAlong: Boolean by mutableStateOf(settings.followAlong)
+        private set
+
+    fun updateFollowAlong(value: Boolean) {
+        followAlong = value
+        settings.followAlong = value
     }
 
     /** Opens the "What's your name?" prompt and loads the existing profiles from the server. */
@@ -638,6 +734,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 deleteOtherVoices()
                 if (autoDownload) startAutoDownload()
                 reportBibles()
+                // A new latest entry may have arrived (or the unread one gone).
+                refreshReminder()
                 if (serverKey == key) {
                     if (profile != null) {
                         syncAnnotations(reportErrors = true)
@@ -964,6 +1062,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                // Listened to the end: the entry counts as read.
+                playerEntryId?.let { markRead(it) }
                 // Rewind so the next Play starts from the beginning.
                 controller?.let {
                     it.pause()
@@ -1598,6 +1698,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var wallJob: Job? = null
 
+    /** Horizontal crop of the app wallpaper (0 = left, 0.5 = centre, 1 = right); see WallpaperLogic.cropRect. */
+    var wallpaperBias: Float by mutableStateOf(WallpaperLogic.clampBias(settings.wallpaperBias))
+        private set
+
+    var darkWallpapersInEvening: Boolean by mutableStateOf(settings.darkWallpapersInEvening)
+        private set
+    var darkFromMinutes: Int by mutableStateOf(SyncScheduleLogic.normalizeMinutes(settings.darkFromMinutes))
+        private set
+    var darkUntilMinutes: Int by mutableStateOf(SyncScheduleLogic.normalizeMinutes(settings.darkUntilMinutes))
+        private set
+
+    fun updateDarkWallpapersInEvening(value: Boolean) {
+        darkWallpapersInEvening = value
+        settings.darkWallpapersInEvening = value
+    }
+
+    fun updateDarkFrom(hour: Int, minute: Int) {
+        darkFromMinutes = SyncScheduleLogic.normalizeMinutes(hour * 60 + minute)
+        settings.darkFromMinutes = darkFromMinutes
+    }
+
+    fun updateDarkUntil(hour: Int, minute: Int) {
+        darkUntilMinutes = SyncScheduleLogic.normalizeMinutes(hour * 60 + minute)
+        settings.darkUntilMinutes = darkUntilMinutes
+    }
+
+    private fun rememberWallpaperBias(value: Float) {
+        wallpaperBias = WallpaperLogic.clampBias(value)
+        settings.wallpaperBias = wallpaperBias
+    }
+
     /** "On each app start": true = a new wallpaper from the server, false = keep mine. */
     var newWallpaperOnStart: Boolean by mutableStateOf(settings.newWallpaperOnStart)
         private set
@@ -1685,6 +1816,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val file = wallpaperStore.replace(api, url, wallpaper)
                     wallpaperStore.decode(file)
                 } ?: throw IllegalStateException("The wallpaper could not be decoded.")
+                // A wallpaper picked by hand is centred.
+                rememberWallpaperBias(0.5f)
                 appWallpaper = bitmap.asImageBitmap()
                 appWallpaperId = wallpaper.id
                 settings.wallpaperId = wallpaper.id
@@ -1768,10 +1901,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun newWallpaperForStart() {
         val url = serverUrl
         val currentId = appWallpaperId.takeIf { it.isNotEmpty() }
+        // In the evening (when asked for) only dark wallpapers, if the server has any.
+        val now = LocalTime.now()
+        val darkOnly = darkWallpapersInEvening &&
+            TimeWindow.contains(now.hour * 60 + now.minute, darkFromMinutes, darkUntilMinutes)
         try {
             val result = withContext(Dispatchers.IO) {
                 val library = api.wallpapers(url) ?: return@withContext null
-                val pick = WallpaperLogic.pickRandom(library, wallStartTopic, currentId, Random.Default)
+                val pick = WallpaperLogic.pickRandom(library, wallStartTopic, currentId, Random.Default, darkOnly)
                 if (pick == null || pick.id == currentId) {
                     Triple(library, null, null)
                 } else {
@@ -1783,6 +1920,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val pick = result.second
             val bitmap = result.third
             if (pick != null && bitmap != null) {
+                // A random horizontal crop for a wallpaper wider than the screen.
+                rememberWallpaperBias(Random.Default.nextFloat())
                 appWallpaper = bitmap.asImageBitmap()
                 appWallpaperId = pick.id
                 settings.wallpaperId = pick.id
@@ -1874,6 +2013,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadAppWallpaper()
         // Also picks up audio that is already playing in the background.
         connectController()
+        scheduleReminder()
+        if (remindersEnabled && isServerConfigured) requestNotificationPermissionOnce()
         if (selectedTab == EntryTab.BIBLE) enterBibleTab()
         // Keep the background work in line with the setting (also after an app update).
         applySchedule()
