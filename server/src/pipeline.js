@@ -260,18 +260,23 @@ export class Pipeline {
 	async fillAudioOnce(retryFailed) {
 		if (this.tts.notReady()) return 0;
 		this.adoptLegacyAudio();
-		const voices = this.tts.voiceList();
 		const entries = this.db.prepare('SELECT * FROM entries WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY id').all();
 		const have = this.db.prepare('SELECT file, error FROM entry_audio WHERE entry_id = ? AND voice = ?');
 		let made = 0;
 		// Voice by voice, so every entry is listenable in the default voice first.
-		const order = [...voices].sort((x, y) => (y.id === this.tts.defaultVoiceId()) - (x.id === this.tts.defaultVoiceId()));
+		// Lessons may be read by the premium voice only (see Tts.voicesFor).
+		const voicesFor = (entry) => this.tts.voicesFor?.(entry) ?? this.tts.voiceList();
+		const def = this.tts.defaultVoiceId();
 		const todo = [];
-		for (const voice of order) {
+		for (const first of [true, false]) {
 			for (const entry of entries) {
-				const row = have.get(entry.id, voice.id);
-				if (row?.file || (row?.error && !retryFailed)) continue;
-				todo.push([entry, voice.id]);
+				for (const voice of voicesFor(entry)) {
+					const isFirst = voice.id === def || voice.lessons_only === true;
+					if (isFirst !== first) continue;
+					const row = have.get(entry.id, voice.id);
+					if (row?.file || (row?.error && !retryFailed)) continue;
+					todo.push([entry, voice.id]);
+				}
 			}
 		}
 		this.audioProgress = todo.length ? { done: 0, total: todo.length } : null;
@@ -322,7 +327,7 @@ export class Pipeline {
 	/** Remakes one entry's audio in every voice (after a change of pace, say). */
 	async remakeAudio(entry) {
 		let made = 0;
-		for (const voice of this.tts.voiceList()) if (await this.makeAudio(entry, voice.id)) made++;
+		for (const voice of this.tts.voicesFor?.(entry) ?? this.tts.voiceList()) if (await this.makeAudio(entry, voice.id)) made++;
 		return made;
 	}
 

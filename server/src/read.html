@@ -76,6 +76,11 @@ article h2, .verses-wrap h2 { font-size:1.6rem; line-height:1.25; margin:.2rem 0
 /* Selectors (version, book, chapter, verse, voice, speed) are shaded like list items; their open lists are plain. */
 select { padding:.3rem .5rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
 select option { background:var(--card); color:var(--ink); }
+/* The follow-along button sits between the voice and the speed and looks like them. */
+.follow { padding:.3rem .7rem; border:1px solid var(--line); border-radius:8px; color:var(--ink); cursor:pointer; background:color-mix(in srgb, color-mix(in srgb, var(--win-bg), #000 calc(var(--shade) * 22%)) calc(var(--win) * 100%), transparent); }
+:root:not([data-wallpaper]) .follow { background:color-mix(in srgb, var(--bg), #000 calc(var(--shade) * 10%)); }
+.follow[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.follow[aria-pressed="true"]::before { content:'✓ '; }
 
 /* Highlights and comments, shared with the app */
 .hl-yellow { background:var(--hl-yellow); } .hl-green { background:var(--hl-green); } .hl-blue { background:var(--hl-blue); } .hl-pink { background:var(--hl-pink); }
@@ -824,8 +829,10 @@ function renderEntry(pane, e) {
 		const voiceSel = el('select'); voiceSel.setAttribute('aria-label', 'Voice');
 		const nameOf = (id) => voices.voices.find((v) => v.id === id)?.name || id || 'Default voice';
 		for (const a of audio) { const o = el('option', nameOf(a.voice)); o.value = a.voice; voiceSel.append(o); }
+		// A lesson's premium voice comes first; otherwise the voice chosen here before, then the server's default.
 		const preferred = store.get('read.voice', voices.default || '');
-		voiceSel.value = audio.some((a) => a.voice === preferred) ? preferred : audio.some((a) => a.voice === voices.default) ? voices.default : audio[0].voice;
+		const has = (v) => v && audio.some((a) => a.voice === v);
+		voiceSel.value = has(e.preferred_voice) ? e.preferred_voice : has(preferred) ? preferred : has(voices.default) ? voices.default : audio[0].voice;
 		const speedSel = el('select'); speedSel.setAttribute('aria-label', 'Speed');
 		for (const s of ['0.75', '1', '1.25', '1.5', '1.75', '2']) { const o = el('option', s + '×'); o.value = s; speedSel.append(o); }
 		speedSel.value = store.get('read.speed', '1');
@@ -841,8 +848,11 @@ function renderEntry(pane, e) {
 		load(false);
 		box.append(player);
 		if (audio.length > 1) box.append(voiceSel);
-		box.append(speedSel);
+		const follow = el('button', 'Follow', 'follow'); follow.type = 'button';
+		follow.title = 'Scroll along with the voice';
+		box.append(follow, speedSel);
 		art.append(box);
+		followAlong(pane, e, player, follow);
 	}
 	const body = el('div', null, 'body');
 	if (e.body) {
@@ -855,6 +865,69 @@ function renderEntry(pane, e) {
 	if (e.body) art.append(notesList({ entry_id: e.id }, 'reading'));
 	pane.append(floaters(back, closeButton('reading')), art);
 	pane.scrollTop = 0;
+}
+
+// Follow along: once the voice has read as far as the middle of the screen, the text scrolls to
+// keep the words being read there, to the end. Scrolling by hand lets go; the button takes hold again.
+// There are no word timings, so the place is worked out from how far through the audio it is.
+function followAlong(pane, e, player, button) {
+	let on = store.get('read.follow', '0') === '1';
+	let lastAuto = 0;
+	const show = () => { button.setAttribute('aria-pressed', String(on)); };
+	// The pane scrolls on a desktop; the page on a phone.
+	const scroller = () => (wide.matches ? pane : document.scrollingElement);
+	const spokenY = () => {
+		const d = player.duration;
+		if (!d || !Number.isFinite(d) || !e.body) return null;
+		const intro = e.speech_offset || 0;
+		const at = Math.max(0, Math.min(e.body.length, (player.currentTime / d) * (intro + e.body.length) - intro));
+		const spans = pane.querySelectorAll('.body [data-s]');
+		for (const sp of spans) {
+			const s0 = Number(sp.dataset.s), e0 = Number(sp.dataset.e);
+			if (at > e0 || !sp.firstChild) continue;
+			const r = document.createRange();
+			const off = Math.max(0, Math.min(sp.firstChild.length, Math.round(at - s0)));
+			r.setStart(sp.firstChild, off); r.setEnd(sp.firstChild, off);
+			const box = r.getClientRects()[0] || sp.getBoundingClientRect();
+			return box.top + box.height / 2;
+		}
+		return null;
+	};
+	const step = () => {
+		if (!on || !button.isConnected || player.paused) return;
+		const y = spokenY();
+		if (y == null) return;
+		const sc = scroller();
+		const view = wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight };
+		const delta = y - (view.top + view.height / 2);
+		// Nothing moves until the voice reaches the middle; then it stays there.
+		if (delta <= 2) return;
+		lastAuto = Date.now();
+		sc.scrollBy({ top: delta, behavior: 'smooth' });
+	};
+	const timer = setInterval(() => { if (!button.isConnected) { clearInterval(timer); cleanup(); return; } step(); }, 500);
+	// A wheel, touch or key scroll by the reader lets go (the scrolling this does itself is not theirs).
+	const letGo = () => { if (on && button.isConnected) { on = false; show(); } };
+	const onKey = (ev) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(ev.key) && !ev.target.closest?.('input, textarea, select, button, audio')) letGo(); };
+	const target = () => (wide.matches ? pane : window);
+	const bound = target();
+	bound.addEventListener('wheel', letGo, { passive: true });
+	bound.addEventListener('touchmove', letGo, { passive: true });
+	window.addEventListener('keydown', onKey);
+	// Dragging the scrollbar: a scroll that this did not start.
+	const onScroll = () => { if (Date.now() - lastAuto > 1200 && on && !player.paused && scrollbarDrag) letGo(); };
+	let scrollbarDrag = false;
+	const down = (ev) => { scrollbarDrag = ev.target === pane || ev.target === document.documentElement; };
+	const up = () => { scrollbarDrag = false; };
+	bound.addEventListener('scroll', onScroll, { passive: true });
+	bound.addEventListener('mousedown', down); window.addEventListener('mouseup', up);
+	function cleanup() {
+		bound.removeEventListener('wheel', letGo); bound.removeEventListener('touchmove', letGo); window.removeEventListener('keydown', onKey);
+		bound.removeEventListener('scroll', onScroll); bound.removeEventListener('mousedown', down); window.removeEventListener('mouseup', up);
+	}
+	button.onclick = () => { on = !on; store.set('read.follow', on ? '1' : '0'); show(); if (on) step(); };
+	player.addEventListener('play', () => { if (store.get('read.follow', '0') === '1' && !on) { on = true; show(); } });
+	show();
 }
 
 // --- Settings page ----------------------------------------------------------------
@@ -943,7 +1016,6 @@ function render() {
 	document.body.classList.toggle('settings-open', Boolean(h.settings));
 	if (h.settings) { $('settings-pane').replaceChildren(); renderSettings($('settings-pane')); setTabs(null); return; }
 	const entry = h.entry != null ? entries.find((x) => x.id === h.entry) : null;
-	if (entry) listTab = kindOf(entry);
 	// On a phone, show what was opened last; after a reload, the reading wins over the Bible.
 	if (!wide.matches) {
 		if (focus === 'reading' && !entry) focus = h.bible ? 'bible' : 'list';
@@ -1053,6 +1125,9 @@ Promise.all([
 	if (randomWall && !freshFromStart && !pickRandomWallpaper()) applyWallpaper();
 	const h = parseHash();
 	focus = h.entry ? 'reading' : h.bible ? 'bible' : 'list';
+	// Opened on a reading: start on its list. After that the lists are free, whatever is open.
+	const opened = h.entry != null ? entries.find((x) => x.id === h.entry) : null;
+	if (opened) listTab = kindOf(opened);
 	render();
 	// First visit in this browser: ask who is reading (once, unless they choose a name).
 	if (!profile && store.get('read.askedProfile') !== '1') askProfile();

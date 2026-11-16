@@ -1,6 +1,7 @@
 // HTTP: the app's API (/api, bearer token), the admin page (/admin, password
 // + session cookie) and Google's OAuth callback.
 import http from 'node:http';
+import { speechText } from './tts.js';
 import { createReadStream, readFileSync } from 'node:fs';
 import { createGzip } from 'node:zlib';
 import { stat } from 'node:fs/promises';
@@ -55,7 +56,7 @@ function parseRefs(text) {
  * heard in; has_audio / audio_bytes / audio_sha256 describe the default voice,
  * for apps from before there was a choice.
  */
-export function entryJson(row, audio = [], defaultVoice = '') {
+export function entryJson(row, audio = [], defaultVoice = '', serverDefault = defaultVoice) {
 	const main = audio.find((a) => a.voice === defaultVoice) || audio[0];
 	return {
 		id: row.id,
@@ -67,6 +68,10 @@ export function entryJson(row, audio = [], defaultVoice = '') {
 		summary: row.summary ?? '',
 		body: row.body,
 		references: parseRefs(row.refs),
+		// Where the listener's default differs from the server's (a premium voice for lessons).
+		preferred_voice: defaultVoice !== serverDefault && audio.some((a) => a.voice === defaultVoice) ? defaultVoice : null,
+		// How many characters the voice reads before the body (title, date, reference), for following along.
+		speech_offset: row.body ? speechText(row).length - row.body.length : 0,
 		has_audio: Boolean(main),
 		audio_bytes: main?.bytes ?? 0,
 		audio_sha256: main?.sha256 ?? null,
@@ -244,7 +249,11 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 			byEntry.get(a.entry_id).push(a);
 		}
 		const def = tts.defaultVoiceId();
-		return rows.map((r) => entryJson(r, r.deleted_at || r.archived_at ? [] : byEntry.get(r.id) || [], def));
+		return rows.map((r) => {
+			const audio = r.deleted_at || r.archived_at ? [] : byEntry.get(r.id) || [];
+			const preferred = tts.preferredVoiceFor ? tts.preferredVoiceFor(r, audio.map((a) => a.voice)) : def;
+			return entryJson(r, audio, preferred, def);
+		});
 	};
 
 	const routes = [];
@@ -274,15 +283,16 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	});
 
 	route('GET', /^\/api\/voices$/, (req, res) => {
-		send(res, 200, { voices: tts.voiceList(), default: tts.defaultVoiceId() || null });
+		send(res, 200, { voices: tts.allVoices ? tts.allVoices() : tts.voiceList(), default: tts.defaultVoiceId() || null });
 	});
 
 	// ?voice=<id> picks the voice; without it, the server's default voice.
 	route('GET', /^\/api\/entries\/(\d+)\/audio$/, async (req, res, m, url) => {
-		const live = db.prepare('SELECT 1 FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(Number(m[1]));
+		const live = db.prepare('SELECT kind FROM entries WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL').get(Number(m[1]));
 		const rows = live ? audioRows.all(Number(m[1])) : [];
 		const wanted = url.searchParams.get('voice');
-		const row = wanted ? rows.find((r) => r.voice === wanted) : rows.find((r) => r.voice === tts.defaultVoiceId()) || rows[0];
+		const preferred = live && tts.preferredVoiceFor ? tts.preferredVoiceFor(live, rows.map((r) => r.voice)) : tts.defaultVoiceId();
+		const row = wanted ? rows.find((r) => r.voice === wanted) : rows.find((r) => r.voice === preferred) || rows[0];
 		if (!row) throw new HttpError(404, wanted ? 'This entry has no audio in that voice.' : 'This entry has no audio yet.');
 		const file = path.join(audioDir, path.basename(row.file));
 		const info = await stat(file).catch(() => null);
@@ -465,7 +475,14 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	route('POST', /^\/admin\/api\/settings$/, async (req, res) => {
 		requireAdmin(req);
+		const premiumBefore = tts.premiumLessons?.() ? tts.premiumVoice().id : null;
 		settings.applyForm(await readJson(req));
+		const premiumNow = tts.premiumLessons?.() ? tts.premiumVoice().id : null;
+		if (premiumNow !== premiumBefore) {
+			// Lessons change voice: apps re-read the entries, and missing audio is made in the background.
+			pipeline.touchAll();
+			if (premiumNow) background(pipeline.fillAudio(), 'Premium lesson audio');
+		}
 		send(res, 200, await adminState());
 	});
 

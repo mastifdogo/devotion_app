@@ -25,6 +25,8 @@ export const DEFAULTS = {
 	tts_openai_key: '',
 	tts_openai_model: 'gpt-4o-mini-tts',
 	tts_openai_voice: 'alloy',
+	// With Piper as the engine: read lessons with the speech API instead (a premium voice for the long ones).
+	premium_lessons: 'off', // off | on
 	github_token: '',
 	// Entries older than this many days are moved to the SMB share.
 	archive_days: '30',
@@ -102,6 +104,7 @@ export class Settings {
 			if (key === 'backup_keep' && !/^[1-9]\d{0,2}$/.test(v)) continue;
 			if (key === 'timezone' && !validTimeZone(v)) continue;
 			if (key === 'tts_provider' && !['piper', 'openai', 'none'].includes(v)) continue;
+			if (key === 'premium_lessons' && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;
 			if (key === 'archive_days' && !/^[1-9]\d{0,3}$/.test(v)) continue;
 			// A share is //server/share; anything else would be handed to smbclient as options.

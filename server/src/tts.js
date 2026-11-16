@@ -149,6 +149,33 @@ export class Tts {
 		return [];
 	}
 
+	/** Lessons read by the speech API while everything else is read by Piper. */
+	premiumLessons() {
+		return this.provider() === 'piper' && this.settings.get('premium_lessons') === 'on' && this.settings.get('tts_openai_key') !== '';
+	}
+
+	premiumVoice() {
+		const voice = this.settings.get('tts_openai_voice');
+		return { id: openaiVoiceId(voice), name: `Premium (${voice})`, description: 'Speech service, lessons only', lessons_only: true };
+	}
+
+	/** The voices this entry is made in: lessons only in the premium voice when that is on. */
+	voicesFor(entry) {
+		if (this.premiumLessons() && entry.kind === 'lesson') return [this.premiumVoice()];
+		return this.voiceList();
+	}
+
+	/** Every voice an entry may have audio in, for the app and the website to name them. */
+	allVoices() {
+		return this.premiumLessons() ? [...this.voiceList(), this.premiumVoice()] : this.voiceList();
+	}
+
+	/** The voice a listener hears by default for this entry, given the voices it has audio in. */
+	preferredVoiceFor(entry, voiceIds) {
+		if (this.premiumLessons() && entry.kind === 'lesson' && voiceIds.includes(this.premiumVoice().id)) return this.premiumVoice().id;
+		return this.defaultVoiceId();
+	}
+
 	defaultVoiceId() {
 		const p = this.provider();
 		if (p === 'piper') return this.voices ? this.voices.defaultId() : this.voiceList()[0]?.id || '';
@@ -189,7 +216,8 @@ export class Tts {
 		const final = path.join(this.audioDir, file);
 		const tmp = final + '.part';
 		try {
-			if (this.provider() === 'piper') await this.piper(text, tmp, voiceId);
+			const premium = this.premiumLessons() && voiceId === this.premiumVoice().id;
+			if (this.provider() === 'piper' && !premium) await this.piper(text, tmp, voiceId);
 			else await this.openai(text, tmp);
 			const data = await readFile(tmp);
 			if (data.length < 256) throw new TtsError('The speech engine produced an empty file.');

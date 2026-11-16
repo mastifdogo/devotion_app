@@ -31,7 +31,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const config = { version: '1.0.0', port: 0, dataDir: dir, adminPassword: '', githubRepo: 'o/r', updateRequestFile: path.join(dir, 'update-request'), env: {} };
 	const db = openDb(dir);
 	const settings = new Settings(db, {});
-	const calls = { google: [], claude: [], run: [], github: [], smb: [], web: [] };
+	const calls = { google: [], claude: [], run: [], github: [], smb: [], web: [], speech: [] };
 	const mails = {
 		m1: { id: 'm1', internalDate: '1763200000000', payload: { mimeType: 'text/html', headers: [{ name: 'Subject', value: m1?.subject ?? 'Daily <b>bread</b>' }, { name: 'From', value: 'daily@example.org' }], body: { data: b64(m1?.html ?? '<p>Give us this day.</p><p>Unsubscribe</p>') } } },
 		m2: { id: 'm2', internalDate: '1763300000000', payload: { mimeType: 'text/plain', headers: [{ name: 'Subject', value: 'Receipt' }], body: { data: b64('Thanks for your order') } } },
@@ -81,7 +81,11 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	};
 	const voices = new Voices({ settings, dataDir: dir, fetchImpl: webFetch, catalog: voiceCatalog });
 	const bibles = new Bibles({ db, dataDir: dir, fetchImpl: webFetch, catalog: bibleCatalog });
-	const tts = new Tts({ settings, audioDir, voices, runImpl, planImpl: (provider) => plan({ cores: 1, memoryMb: 1024, usableMb: 819 }, provider) });
+	const speechFetch = async (url, init) => {
+		calls.speech.push({ url: String(url), auth: init.headers.authorization, body: JSON.parse(init.body) });
+		return new Response(Buffer.alloc(4096, 9), { status: 200 });
+	};
+	const tts = new Tts({ settings, audioDir, voices, runImpl, fetchImpl: speechFetch, planImpl: (provider) => plan({ cores: 1, memoryMb: 1024, usableMb: 819 }, provider) });
 	// A stand-in for smbclient: remembers what was "put" and lists it back.
 	const share = { files: new Map(), fail: null };
 	const smbRun = async (cmd, args) => {
@@ -249,6 +253,7 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.deepEqual({ ...entry, id: 0, created_at: '', updated_at: '', audio_sha256: '', audio: entry.audio.map((a) => ({ ...a, sha256: '' })) }, {
 		id: 0, kind: 'daily_reading', lesson_number: null, title: 'Daily Bread', entry_date: '2025-11-15', scripture: 'Matthew 6:11', summary: 'On provision.', body: 'Give us this day.',
 		references: [{ start: 8, end: 16, book: 'Matthew', book_index: 39, chapter: 6, verse_start: 11, verse_end: null }],
+		preferred_voice: null, speech_offset: 'Saturday, November 15.\n\nDaily Bread.\n\nMatthew 6:11.\n\n'.length,
 		has_audio: true, audio_bytes: 2048, audio_sha256: '', audio: [{ voice: 'voice', bytes: 2048, sha256: '' }], source_from: 'daily@example.org', source_subject: 'Daily <b>bread</b>', created_at: '', updated_at: '', archived: false, deleted: false,
 	});
 	const audio = await call(`/api/entries/${entry.id}/audio`);
@@ -270,6 +275,49 @@ test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	assert.deepEqual(after.entries.map((e) => [e.id, e.deleted, e.has_audio, e.body]), [[entry.id, true, false, '']]);
 	assert.equal((await (await call('/api/entries')).json()).entries.length, 0);
 	assert.equal((await call(`/api/entries/${entry.id}/audio`)).status, 404);
+});
+
+test('premium speech for lessons only', async (t) => {
+	const lesson = { title: 'Victory After Struggling', entry_date: '2026-11-08', scripture: null, summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
+	const reading = { title: 'Daily Bread', entry_date: '2026-11-15', scripture: null, summary: 'S.', body: 'Give us this day.', references: [] };
+	const { call, calls, connectGmail, settings } = await setup(t, {
+		m1: { subject: 'Lesson 11 – Victory After Struggling', html: '<p>Lesson 11</p><p>November 15, 2026</p><p>Give us this day.</p>' },
+		extractResult: (p) => ({ entries: p.messages[0].content.includes('Receipt') ? [reading] : [lesson] }),
+	});
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt, order', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await connectGmail();
+	const entries = async () => (await (await call('/api/entries')).json()).entries;
+	const wait = async (check) => { for (let i = 0; i < 100 && !check(await entries()); i++) await new Promise((r) => setTimeout(r, 10)); };
+	// Without it, both are read by the server's voice.
+	let list = await entries();
+	assert.deepEqual(list.map((e) => [e.kind, e.audio.map((a) => a.voice), e.preferred_voice]).sort(), [['daily_reading', ['voice'], null], ['lesson', ['voice'], null]]);
+	assert.equal(calls.speech.length, 0);
+	// Turned on without a key: nothing changes.
+	await call('/admin/api/settings', { body: { premium_lessons: 'on' } });
+	assert.equal((await (await call('/api/voices')).json()).voices.length, 1);
+	// With a key, the lesson (only) is also made by the speech API, and that is what listeners get.
+	await call('/admin/api/settings', { body: { tts_openai_key: 'sk-speech', tts_openai_voice: 'Nova' } });
+	await wait((l) => l.find((e) => e.kind === 'lesson').audio.length === 2);
+	list = await entries();
+	assert.deepEqual(list.map((e) => [e.kind, e.audio.map((a) => a.voice), e.preferred_voice]).sort(), [['daily_reading', ['voice'], null], ['lesson', ['api-nova', 'voice'], 'api-nova']]);
+	assert.equal(calls.speech.length, 1);
+	assert.deepEqual([calls.speech[0].auth, calls.speech[0].body.voice], ['Bearer sk-speech', 'Nova']);
+	assert.match(calls.speech[0].body.input, /^Lesson 11\./);
+	const les = list.find((e) => e.kind === 'lesson');
+	assert.equal(les.audio_bytes, 4096);
+	assert.equal(Number((await call(`/api/entries/${les.id}/audio`)).headers.get('content-length')), 4096);
+	assert.equal(Number((await call(`/api/entries/${les.id}/audio?voice=voice`)).headers.get('content-length')), 2048);
+	assert.deepEqual((await (await call('/api/voices')).json()).voices.map((v) => [v.id, v.lessons_only ?? false]), [['voice', false], ['api-nova', true]]);
+	// "Redo audio" on the lesson uses the premium voice only; piper is not run again for it.
+	const piperBefore = calls.run.filter((c) => c.cmd === 'piper').length;
+	await call(`/admin/api/entries/${les.id}/audio`, { body: {} });
+	await wait(() => calls.speech.length === 2);
+	assert.equal(calls.run.filter((c) => c.cmd === 'piper').length, piperBefore);
+	// Off again: the server's voice is the default once more.
+	await call('/admin/api/settings', { body: { premium_lessons: 'off' } });
+	assert.equal((await entries()).find((e) => e.kind === 'lesson').preferred_voice, null);
+	assert.equal(settings.get('premium_lessons'), 'off');
 });
 
 test('a lesson is sorted from its subject, not by the model, and can be corrected by hand', async (t) => {
