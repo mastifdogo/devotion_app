@@ -230,15 +230,15 @@ private fun BibleVersions(vm: MainViewModel) {
 }
 
 /**
- * List item card over a wallpaper: surfaceContainer at the list item opacity with an outline
- * (at 0% only the outline). Nothing without a wallpaper.
+ * List item card over a wallpaper: the window's colour darkened by the list item shade, with an
+ * outline (at 0% only the outline). Nothing without a wallpaper.
  */
 @Composable
 private fun itemCardModifier(vm: MainViewModel, shape: Shape): Modifier =
     if (vm.appWallpaper != null) {
         Modifier
             .clip(shape)
-            .background(itemCardFill(vm.listItemOpacity))
+            .background(itemCardFill(vm.listItemShade))
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
     } else {
         Modifier

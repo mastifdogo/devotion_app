@@ -1402,14 +1402,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var appWallpaperId: String by mutableStateOf(settings.wallpaperId)
         private set
-    /** Opacity of the list item cards inside the text window, 0..1. */
-    var listItemOpacity: Float by mutableStateOf(WindowLogic.clampItemOpacity(settings.listItemOpacity))
+    /** How much darker than the window the list item cards are, 0..1 (default 0.4). */
+    var listItemShade: Float by mutableStateOf(
+        WindowLogic.migrateShade(settings.listItemShadeRaw, settings.listItemShadeMigrated),
+    )
         private set
 
-    fun updateListItemOpacity(value: Float) {
-        val v = WindowLogic.clampItemOpacity(value)
-        listItemOpacity = v
-        settings.listItemOpacity = v
+    fun updateListItemShade(value: Float) {
+        val v = WindowLogic.clampShade(value)
+        listItemShade = v
+        settings.setListItemShade(v)
     }
 
     /** Opacity of the text window over the app wallpaper, 0.5..1. */

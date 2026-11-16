@@ -20,13 +20,30 @@ object WindowLogic {
     fun clampOpacity(value: Float): Float =
         if (value.isNaN() || value.isInfinite()) DEFAULT_OPACITY else value.coerceIn(MIN_OPACITY, MAX_OPACITY)
 
-    /** The list item opacity, 0%..100%; NaN or infinite values give 100%. */
-    fun clampItemOpacity(value: Float): Float =
-        if (value.isNaN() || value.isInfinite()) 1f else value.coerceIn(0f, 1f)
+    /** Black at this alpha over the window colour is the darkest list item shade (slider at 100%). */
+    const val MAX_SHADE_ALPHA = 0.22f
 
-    /** "85%" for a list item opacity of 0.85 (after clamping). */
-    fun itemOpacityLabel(value: Float): String =
-        String.format(Locale.ROOT, "%d%%", (clampItemOpacity(value) * 100f).roundToInt())
+    /** Out of the box the cards are slightly darker than the window. */
+    const val DEFAULT_SHADE = 0.4f
+
+    /** The list item shade, 0%..100%; NaN or infinite values give the default (40%). */
+    fun clampShade(value: Float): Float =
+        if (value.isNaN() || value.isInfinite()) DEFAULT_SHADE else value.coerceIn(0f, 1f)
+
+    /** Alpha of the black tint drawn over the window colour on list item cards: linear, 0..22%. */
+    fun shadeAlpha(shade: Float): Float = clampShade(shade) * MAX_SHADE_ALPHA
+
+    /**
+     * The stored `list_item_opacity` value as a shade. Until the slider is moved under its new
+     * meaning ([migrated] false), the old default 1.0 (never moved, or unset) means the new
+     * default 40%; any other old value is kept.
+     */
+    fun migrateShade(stored: Float, migrated: Boolean): Float =
+        if (!migrated && stored == 1f) DEFAULT_SHADE else clampShade(stored)
+
+    /** "40%" for a shade of 0.4 (after clamping). */
+    fun shadeLabel(value: Float): String =
+        String.format(Locale.ROOT, "%d%%", (clampShade(value) * 100f).roundToInt())
 
     /** "95%" for 0.95 (after clamping). */
     fun opacityLabel(value: Float): String =

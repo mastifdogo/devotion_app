@@ -459,14 +459,14 @@ private fun WallpaperSection(vm: MainViewModel) {
         )
     }
     Spacer(modifier = Modifier.height(8.dp))
-    // The cards inside the window (entries, Bible chapters, books, versions): 0% = outline only.
+    // How much darker than the window the cards are (entries, Bible chapters, books, versions).
     Text(
-        text = "List item opacity: ${WindowLogic.itemOpacityLabel(vm.listItemOpacity)}",
+        text = "List item shade: ${WindowLogic.shadeLabel(vm.listItemShade)}",
         style = MaterialTheme.typography.bodyMedium,
     )
     Slider(
-        value = vm.listItemOpacity,
-        onValueChange = { vm.updateListItemOpacity(it) },
+        value = vm.listItemShade,
+        onValueChange = { vm.updateListItemShade(it) },
         valueRange = 0f..1f,
         enabled = current != null,
         modifier = Modifier.fillMaxWidth(),

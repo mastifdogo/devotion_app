@@ -161,11 +161,13 @@ The reader asks for your name the first time (the same profiles as the app)
 and has three tabs: **Daily readings**, **Lessons** and **Bible**. The Bible
 tab offers the versions you have downloaded in the app (the app tells the
 server), or all of the server's if you have none yet; verse references in a
-reading are links that open it at the passage. On a desktop the list and the
-reading sit side by side, each scrolling on its own; on a phone, one at a
-time. The ⚙ icon opens a settings page: your profile, the theme, a
-wallpaper from the server, and the opacity of the text windows and of the
-list items. The house icon goes back to the start page.
+reading are links that open it at the passage. On a desktop the page uses
+the whole width: the list, then the reading and the Bible side by side,
+each in its own window that scrolls on its own; drag the divider between
+them to share the width (double-click it to even them out) and close
+either with its ×. On a phone, one at a time. The ⚙ icon opens a settings
+page: your profile, the theme, a wallpaper from the server, the window
+opacity, and how much darker list items are than the window. The house icon goes back to the start page.
 
 ### Wallpapers
 

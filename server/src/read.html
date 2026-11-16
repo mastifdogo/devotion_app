@@ -5,45 +5,55 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Devotion</title>
 <script>
-// Before the page paints: this browser's theme, wallpaper and opacities.
+// Before the page paints: this browser's theme, wallpaper, opacity and shade.
 try {
 	const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
 	const w = localStorage.getItem('read.wallpaper'); if (w && /^[A-Za-z0-9]{1,16}$/.test(w)) document.documentElement.dataset.wallpaper = w;
 	const o = Number(localStorage.getItem('read.opacity')); if (o >= 50 && o <= 100) document.documentElement.style.setProperty('--win', o / 100);
-	const i = localStorage.getItem('read.itemOpacity'); if (i !== null && Number(i) >= 0 && Number(i) <= 100) document.documentElement.style.setProperty('--item', Number(i) / 100);
+	const s = localStorage.getItem('read.itemShade'); if (s !== null && Number(s) >= 0 && Number(s) <= 100) document.documentElement.style.setProperty('--shade', Number(s) / 100);
+	const r = Number(localStorage.getItem('read.split')); if (r >= 0.2 && r <= 0.8) document.documentElement.style.setProperty('--split', r);
 } catch {}
 </script>
 <style>
-:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --raised:#faf8f4; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --mark:#f6e7a8; --win:1; --item:1; }
-:root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --raised:#2b2a27; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; } }
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fffdf9; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --mark:#f6e7a8; --win:1; --shade:.4; --split:.5; }
+:root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#25241f; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#25241f; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; } }
 * { box-sizing: border-box; }
 html { background:var(--bg); }
 body { margin:0; min-height:100vh; color:var(--ink); font:16px/1.6 system-ui, sans-serif; background:var(--bg) center / cover no-repeat fixed; }
 button, input, select { font:inherit; color:inherit; }
 
-/* Windows: the text sits on these; with a wallpaper, it shows around them. */
-.window { background:color-mix(in srgb, var(--card) calc(var(--win) * 100%), transparent); border:1px solid var(--line); border-radius:16px; }
-:root:not([data-wallpaper]) .window { border-color:transparent; background:var(--bg); border-radius:0; }
-:root[data-wallpaper] .window { box-shadow:0 8px 32px rgba(0,0,0,.18); -webkit-backdrop-filter:blur(calc((1 - var(--win)) * 24px)); backdrop-filter:blur(calc((1 - var(--win)) * 24px)); }
-/* Items inside a window (list entries, Bible books and chapters) have their own opacity. */
-.item, .cell { background:color-mix(in srgb, var(--raised) calc(var(--item) * 100%), transparent); border:1px solid var(--line); border-radius:10px; color:var(--ink); }
+/* Windows, as in the app: the window colour at the chosen opacity, nothing blurred behind it. */
+.window { --win-bg: var(--card); background:color-mix(in srgb, var(--win-bg) calc(var(--win) * 100%), transparent); border:1px solid var(--line); border-radius:16px; }
+:root:not([data-wallpaper]) .window { --win-bg: var(--bg); background:var(--bg); border-color:transparent; border-radius:0; }
+:root[data-wallpaper] .window { box-shadow:0 6px 24px rgba(0,0,0,.16); }
+/* Items in a window are the window's colour made darker (the shade slider), never more see-through than it. */
+.item, .cell { background:color-mix(in srgb, color-mix(in srgb, var(--win-bg), #000 calc(var(--shade) * 22%)) calc(var(--win) * 100%), transparent); border:1px solid var(--line); border-radius:10px; color:var(--ink); }
+:root:not([data-wallpaper]) .item, :root:not([data-wallpaper]) .cell { background:color-mix(in srgb, var(--bg), #000 calc(var(--shade) * 10%)); }
 
-.shell { max-width:44rem; margin:0 auto; padding:0 1rem 2rem; }
+.shell { padding:0 1rem 2rem; max-width:44rem; margin:0 auto; }
 :root[data-wallpaper] .shell { padding:12px 12px 24px; }
-.top { padding:.7rem 1rem 0; margin-bottom:12px; }
-:root:not([data-wallpaper]) .top { position:sticky; top:0; z-index:2; border-bottom:1px solid var(--line); padding:.7rem 0 0; }
+.top { padding:.6rem 1rem 0; margin-bottom:12px; }
+:root:not([data-wallpaper]) .top { position:sticky; top:0; z-index:2; border-bottom:1px solid var(--line); padding:.6rem 0 0; }
 .bar { display:flex; align-items:center; gap:.4rem; }
 .bar h1 { font-size:1.25rem; margin:0; flex:1; }
-.icon { display:inline-grid; place-items:center; width:2.2rem; height:2.2rem; border-radius:50%; color:var(--ink); background:none; border:0; cursor:pointer; text-decoration:none; }
+.icon { display:inline-grid; place-items:center; width:2.2rem; height:2.2rem; border-radius:50%; color:var(--ink); background:none; border:0; cursor:pointer; text-decoration:none; flex:none; }
 .icon:hover { background:color-mix(in srgb, var(--ink) 8%, transparent); }
 .icon svg { width:1.3rem; height:1.3rem; }
-.tabs { display:flex; gap:1.4rem; margin-top:.2rem; }
+.tabs { display:flex; gap:1.4rem; margin-top:.1rem; }
 .tabs button { background:none; border:0; border-bottom:3px solid transparent; padding:.5rem 0; font-weight:600; color:var(--muted); cursor:pointer; }
 .tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); }
-.pane { padding:1rem; }
+.pane { padding:1rem; min-width:0; }
 :root:not([data-wallpaper]) .pane { padding:0; }
-#right:empty { display:none; }
+.pane-head { display:flex; align-items:center; gap:.5rem; margin:-.2rem 0 .6rem; }
+/* The selectors and the close button stay at the top of a window while its text scrolls. */
+@media (min-width: 960px) {
+	.pane-head { position:sticky; top:-1rem; z-index:1; margin:-1rem -1rem .6rem; padding:.7rem 1rem .5rem; background:var(--win-bg); border-radius:16px 16px 0 0; border-bottom:1px solid var(--line); }
+	:root:not([data-wallpaper]) .pane-head { top:0; margin:0 0 .6rem; padding:.4rem 0; border-radius:0; }
+}
+.pane-head .grow { flex:1; min-width:0; }
+.pane-head select { max-width:100%; }
+.close { display:none; }
 
 .item { display:block; width:100%; text-align:left; padding:.8rem .9rem; margin:0 0 .6rem; text-decoration:none; cursor:pointer; }
 .item:hover, .item[aria-current="true"], .cell:hover, .cell[aria-current="true"] { border-color:var(--accent); }
@@ -52,22 +62,20 @@ button, input, select { font:inherit; color:inherit; }
 .muted { color:var(--muted); } .small { font-size:.85rem; }
 .summary { color:var(--muted); font-size:.92rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .pill { display:inline-block; font-size:.72rem; border:1px solid var(--line); border-radius:999px; padding:0 .5rem; margin-left:.4rem; color:var(--muted); vertical-align:middle; font-weight:500; }
-article h2 { font-size:1.6rem; line-height:1.25; margin:.2rem 0 .3rem; }
-.card { background:var(--raised); border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; margin:1rem 0; }
+article h2, .verses-wrap h2 { font-size:1.6rem; line-height:1.25; margin:.2rem 0 .3rem; }
+.card { background:color-mix(in srgb, var(--win-bg, var(--card)), #000 6%); border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; margin:1rem 0; }
 .player { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
 .player audio { width:100%; }
 select { padding:.25rem .4rem; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
 .body p { margin:0 0 1em; }
 .body p.head { font-weight:600; margin-top:1.4em; }
-.body a, .ref { color:var(--accent); text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+.body a { color:var(--accent); text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .empty { text-align:center; color:var(--muted); padding:3rem 0; }
 .back { color:var(--accent); font-size:.9rem; text-decoration:none; background:none; border:0; padding:0; cursor:pointer; }
 
 /* Bible */
-.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(3.2rem, 1fr)); gap:.4rem; }
-.cell { padding:.45rem 0; text-align:center; cursor:pointer; font-size:.95rem; text-decoration:none; display:block; }
-.books { display:grid; grid-template-columns:repeat(auto-fill, minmax(9.5rem, 1fr)); gap:.4rem; }
-.books .cell { text-align:left; padding:.45rem .7rem; }
+.books { display:grid; grid-template-columns:repeat(auto-fill, minmax(9rem, 1fr)); gap:.4rem; }
+.cell { padding:.45rem .7rem; cursor:pointer; font-size:.95rem; text-decoration:none; display:block; }
 .verses p { margin:0 0 .5em; }
 .verses sup { color:var(--muted); font-size:.7em; margin-right:.25em; }
 .verses .hit { background:var(--mark); border-radius:4px; box-shadow:0 0 0 3px var(--mark); }
@@ -76,9 +84,10 @@ select { padding:.25rem .4rem; border:1px solid var(--line); border-radius:6px; 
 .chapnav button:disabled { opacity:.4; cursor:default; }
 
 /* Settings page */
+.settings { max-width:44rem; margin:0 auto; }
 .settings h2 { font-size:1.4rem; margin:.3rem 0 1rem; }
 .settings h3 { font-size:1rem; margin:1.4rem 0 .5rem; }
-.choices { display:flex; gap:.4rem; flex-wrap:wrap; }
+.choices { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
 .chip { padding:.25rem .8rem; border-radius:999px; border:1px solid var(--line); background:transparent; cursor:pointer; font-size:.9rem; }
 .chip[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--card); }
 .walls { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:.5rem; margin-top:.6rem; }
@@ -87,7 +96,7 @@ select { padding:.25rem .4rem; border:1px solid var(--line); border-radius:6px; 
 .wall.none { display:grid; place-items:center; font-size:.8rem; color:var(--muted); background:var(--bg); border:1px dashed var(--line); }
 .slider { display:flex; align-items:center; gap:.7rem; margin-top:.6rem; }
 .slider input { flex:1; accent-color:var(--accent); }
-.slider span:first-child { min-width:10rem; }
+.slider span:first-child { min-width:8rem; }
 .slider .val { min-width:3rem; text-align:right; color:var(--muted); }
 
 /* Profile prompt */
@@ -101,23 +110,37 @@ dialog input[type=text] { width:100%; padding:.55rem .7rem; border:1px solid var
 .who button { text-align:left; }
 .err { color:#a23b3b; font-size:.85rem; min-height:1.2em; }
 
-/* Desktop: two windows side by side, each scrolling on its own. */
-@media (min-width: 960px) {
-	.shell { max-width:80rem; padding:0 2rem 1.5rem; }
-	:root[data-wallpaper] .shell { padding:24px 32px 24px; }
-	.columns { display:grid; grid-template-columns:minmax(20rem, 26rem) 1fr; gap:24px; align-items:start; }
-	:root:not([data-wallpaper]) .columns { gap:2rem; }
-	.columns > .pane { position:sticky; top:calc(var(--top-h, 7rem) + 12px); max-height:calc(100vh - var(--top-h, 7rem) - 36px); overflow:auto; overscroll-behavior:contain; }
-	#right:empty { display:block; }
-	#right:empty::before { content:attr(data-empty); display:block; color:var(--muted); text-align:center; padding:4rem 0; }
-	.columns.single { grid-template-columns:1fr; }
-	.back.narrow-only { display:none; }
-	article, .verses-wrap, .settings { max-width:42rem; margin:0 auto; }
-	article { font-size:1.05rem; }
-	:root:not([data-wallpaper]) #right { border-left:1px solid var(--line); padding-left:2rem; }
+#settings-pane { display:none; }
+body.settings-open #columns { display:none; }
+body.settings-open #settings-pane { display:block; }
+
+/* Phone and narrow windows: one pane at a time. */
+@media (max-width: 959px) {
+	.columns > .pane:not(.shown) { display:none; }
+	.handle { display:none; }
 }
-@media (max-width: 959px) { body.detail #left { display:none; } }
-.columns.single #left { display:none; }
+
+/* Desktop: the whole width. The list, then the reading and the Bible side by side with a divider to drag. */
+@media (min-width: 960px) {
+	.shell { max-width:none; padding:0 1.5rem 1.2rem; }
+	:root[data-wallpaper] .shell { padding:16px 20px 16px; }
+	.columns { display:grid; gap:16px; align-items:start; grid-template-columns:minmax(17rem, 22rem) minmax(0, var(--split-left, 1fr)) 8px minmax(0, var(--split-right, 1fr)); }
+	.columns > .pane { position:sticky; top:calc(var(--top-h, 7rem) + 12px); height:calc(100vh - var(--top-h, 7rem) - 30px); overflow:auto; overscroll-behavior:contain; }
+	:root:not([data-wallpaper]) .columns > .pane { height:calc(100vh - var(--top-h, 7rem) - 20px); }
+	.columns.no-bible { grid-template-columns:minmax(17rem, 22rem) minmax(0, 1fr); }
+	.columns.no-reading { grid-template-columns:minmax(17rem, 22rem) minmax(0, 1fr); }
+	.columns.no-bible #bible-pane, .columns.no-bible .handle, .columns.no-reading #reading-pane, .columns.no-reading .handle { display:none; }
+	.handle { position:sticky; top:calc(var(--top-h, 7rem) + 12px); height:calc(100vh - var(--top-h, 7rem) - 30px); cursor:col-resize; border-radius:4px; touch-action:none; display:grid; place-items:center; }
+	.handle::after { content:''; width:4px; height:3rem; border-radius:2px; background:var(--line); }
+	.handle:hover::after, .handle.dragging::after { background:var(--accent); }
+	:root[data-wallpaper] .handle::after { background:rgba(255,255,255,.7); }
+	.close { display:inline-grid; }
+	.narrow-only { display:none !important; }
+	article, .verses-wrap { max-width:46rem; margin:0 auto; }
+	article { font-size:1.05rem; }
+	.tabs button[data-tab="bible"][aria-pressed="true"] { color:var(--ink); }
+	:root:not([data-wallpaper]) #bible-pane { border-left:1px solid var(--line); padding-left:1rem; }
+}
 </style>
 </head>
 <body>
@@ -139,9 +162,12 @@ dialog input[type=text] { width:100%; padding:.55rem .7rem; border:1px solid var
 		</div>
 	</header>
 	<div class="columns" id="columns">
-		<section class="pane window" id="left" aria-label="List"></section>
-		<section class="pane window" id="right" aria-live="polite"></section>
+		<section class="pane window" id="list-pane" aria-label="Readings"></section>
+		<section class="pane window" id="reading-pane" aria-label="Reading" aria-live="polite"></section>
+		<div class="handle" id="handle" role="separator" aria-orientation="vertical" aria-label="Drag to resize the reading and the Bible" tabindex="0"></div>
+		<section class="pane window" id="bible-pane" aria-label="Bible"></section>
 	</div>
+	<section class="pane window" id="settings-pane"></section>
 </div>
 
 <dialog id="who">
@@ -165,9 +191,11 @@ const el = (tag, text, cls) => { const e = document.createElement(tag); if (text
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
 const wide = window.matchMedia('(min-width: 960px)');
 const getJson = async (url, init) => { const r = await fetch(url, init); const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { status: r.status }); return j; };
+const closeIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 
 let entries = [], voices = { voices: [], default: null };
-let tab = store.get('read.tab', 'daily_reading');
+let listTab = store.get('read.tab', 'daily_reading') === 'lesson' ? 'lesson' : 'daily_reading';
+let focus = 'list'; // on a phone, the one pane shown: list | reading | bible
 let profile = (() => { try { return JSON.parse(store.get('read.profile', 'null')); } catch { return null; } })();
 let serverBibles = [], profileBibles = [], bible = null; // bible: the version open, loaded in full
 let library = { topics: [], wallpapers: [] }, wallTopic = 'all';
@@ -182,7 +210,41 @@ function heading(e) {
 }
 const sortKey = (e) => (e.entry_date || e.created_at || '') + '|' + (e.created_at || '') + '|' + String(e.id).padStart(9, '0');
 
-// --- Look: theme, wallpaper, opacities ----------------------------------------
+// --- The address: which reading and which passage are open ---------------------
+// "#/entry/12", "#/bible/kjv/44/8/37-38", both together on a desktop
+// ("#/entry/12/bible/kjv/44/8"), or "#/settings".
+function parseHash() {
+	const h = location.hash;
+	if (h === '#/settings') return { settings: true };
+	const e = /(?:^#|\/)entry\/(\d+)/.exec(h);
+	const b = /(?:^#|\/)bible\/([a-z0-9]+)(?:\/(\d+)\/(\d+)(?:\/(\d+)(?:-(\d+))?)?)?/.exec(h);
+	return {
+		entry: e ? Number(e[1]) : null,
+		bible: b ? { version: b[1], book: b[2] != null ? Number(b[2]) : null, chapter: b[3] ? Number(b[3]) : null, verse: b[4] ? Number(b[4]) : null, verseEnd: b[5] ? Number(b[5]) : null } : null,
+	};
+}
+function hashFor({ entry, bible: b }) {
+	const parts = [];
+	if (entry) parts.push(`entry/${entry}`);
+	if (b) parts.push(`bible/${b.version}` + (b.book != null ? `/${b.book}/${b.chapter || 1}` + (b.verse ? `/${b.verse}` + (b.verseEnd ? `-${b.verseEnd}` : '') : '') : ''));
+	return parts.length ? '#/' + parts.join('/') : '';
+}
+// Changes what is open. On a phone only one pane shows, so opening one replaces the other.
+function go(change, newFocus) {
+	const cur = parseHash();
+	const next = { entry: cur.settings ? null : cur.entry, bible: cur.settings ? null : cur.bible, ...change };
+	if (!wide.matches) {
+		if (newFocus === 'reading') next.bible = null;
+		if (newFocus === 'bible') next.entry = null;
+		if (newFocus === 'list') { next.entry = null; next.bible = null; }
+	}
+	if (newFocus) focus = newFocus;
+	if (next.bible) store.set('read.biblePos', JSON.stringify(next.bible));
+	const h = hashFor(next);
+	if (location.hash !== h) location.hash = h; else render();
+}
+
+// --- Look: theme, wallpaper, opacity, shade ------------------------------------
 function setTheme(mode) {
 	if (mode === 'auto') delete root.dataset.theme; else root.dataset.theme = mode;
 	store.set('theme', mode === 'auto' ? null : mode);
@@ -250,14 +312,16 @@ function availableBibles() {
 }
 
 // --- Bible ------------------------------------------------------------------------
-async function openVersion(id) {
+async function loadVersion(id) {
 	if (bible?.id === id) return bible;
-	$('right').replaceChildren(el('p', 'Loading the Bible…', 'empty'));
 	bible = await getJson(`/api/bibles/${encodeURIComponent(id)}`);
 	store.set('read.bible', id);
 	return bible;
 }
-const bibleHash = (v, b, c, vs, ve) => `#/bible/${encodeURIComponent(v)}/${b}/${c}` + (vs ? `/${vs}` + (ve ? `-${ve}` : '') : '');
+function defaultVersion() {
+	const { list } = availableBibles();
+	return list.some((b) => b.id === store.get('read.bible')) ? store.get('read.bible') : list[0]?.id || null;
+}
 // A reference from an entry: book by its standard position when the version has the usual 66 books, else by name.
 function bookIndexFor(ref, version) {
 	if (version.books.length === 66 && ref.book_index >= 0 && ref.book_index < 66) return ref.book_index;
@@ -265,85 +329,101 @@ function bookIndexFor(ref, version) {
 	const i = version.books.findIndex((b) => b.name.toLowerCase() === want);
 	return i >= 0 ? i : null;
 }
-
-function renderBibleLeft(pane, route) {
-	const { list, mine } = availableBibles();
-	if (!list.length) { pane.append(el('p', 'This server has no Bible versions yet: they are added on its admin panel.', 'empty')); return; }
-	const pick = el('select'); pick.setAttribute('aria-label', 'Bible version');
-	for (const b of list) { const o = el('option', b.name); o.value = b.id; pick.append(o); }
-	const current = route.version && list.some((b) => b.id === route.version) ? route.version : list.some((b) => b.id === store.get('read.bible')) ? store.get('read.bible') : list[0].id;
-	pick.value = current;
-	pick.onchange = () => { location.hash = `#/bible/${encodeURIComponent(pick.value)}`; };
-	pane.append(pick);
-	if (!mine) pane.append(el('p', profile ? 'You have no versions downloaded in the app yet, so these are all the versions on the server.' : 'Choose your name (⚙ Settings) to see the versions you downloaded in the app.', 'small muted'));
-	if (!bible || bible.id !== current) { openVersion(current).then(render).catch(() => pane.append(el('p', 'Could not load this version.', 'muted'))); return; }
-	const books = el('div', null, 'books'); books.style.marginTop = '.8rem';
-	bible.books.forEach((b, i) => {
-		const a = el('a', b.name, 'cell'); a.href = bibleHash(bible.id, i, 1);
-		if (i === route.book) a.setAttribute('aria-current', 'true');
-		books.append(a);
-	});
-	if (route.book == null || wide.matches) pane.append(books);
+async function openReference(ref) {
+	const id = defaultVersion();
+	if (!id) { alert('This server has no Bible versions yet.'); return; }
+	try {
+		const v = await loadVersion(id);
+		const b = bookIndexFor(ref, v);
+		go({ bible: b == null ? { version: id, book: null } : { version: id, book: b, chapter: Math.min(ref.chapter, v.books[b].chapters.length), verse: ref.verse_start, verseEnd: ref.verse_end } }, 'bible');
+	} catch { alert('Could not open the Bible.'); }
 }
 
-function renderBibleRight(pane, route) {
-	if (!bible || route.book == null) { pane.dataset.empty = 'Choose a book on the left.'; return; }
-	const book = bible.books[route.book];
-	if (!book) return;
-	const back = el('a', '← Books', 'back narrow-only'); back.href = `#/bible/${encodeURIComponent(bible.id)}`;
+function renderBible(pane, pos) {
+	const { list, mine } = availableBibles();
+	const head = el('div', null, 'pane-head');
+	pane.append(head);
+	if (!list.length) { pane.append(el('p', 'This server has no Bible versions yet: they are added on its admin panel.', 'empty')); head.append(closeButton('bible')); return; }
+	const version = pos.version && list.some((b) => b.id === pos.version) ? pos.version : defaultVersion();
+	if (!bible || bible.id !== version) {
+		pane.append(el('p', 'Loading the Bible…', 'empty'));
+		loadVersion(version).then(render).catch(() => pane.replaceChildren(el('p', 'Could not load this version.', 'empty')));
+		return;
+	}
+	const grow = el('div', null, 'grow choices');
+	const pick = el('select'); pick.setAttribute('aria-label', 'Bible version');
+	for (const b of list) { const o = el('option', b.name); o.value = b.id; pick.append(o); }
+	pick.value = version;
+	pick.onchange = () => go({ bible: { version: pick.value, book: pos.book, chapter: pos.chapter } }, 'bible');
+	grow.append(pick);
+	if (pos.book != null && bible.books[pos.book]) {
+		const bookSel = el('select'); bookSel.setAttribute('aria-label', 'Book');
+		bible.books.forEach((b, i) => { const o = el('option', b.name); o.value = String(i); bookSel.append(o); });
+		bookSel.value = String(pos.book);
+		bookSel.onchange = () => go({ bible: { version, book: Number(bookSel.value), chapter: 1 } }, 'bible');
+		const chapSel = el('select'); chapSel.setAttribute('aria-label', 'Chapter');
+		bible.books[pos.book].chapters.forEach((_, i) => { const o = el('option', `Chapter ${i + 1}`); o.value = String(i + 1); chapSel.append(o); });
+		chapSel.value = String(Math.min(pos.chapter || 1, bible.books[pos.book].chapters.length));
+		chapSel.onchange = () => go({ bible: { version, book: pos.book, chapter: Number(chapSel.value) } }, 'bible');
+		const books = el('button', 'All books', 'chip'); books.type = 'button';
+		books.onclick = () => go({ bible: { version, book: null } }, 'bible');
+		grow.append(bookSel, chapSel, books);
+	}
+	head.append(grow, closeButton('bible'));
+	if (!mine) pane.append(el('p', profile ? 'You have no versions downloaded in the app yet, so these are all the versions on the server.' : 'Choose your name (⚙ Settings) to see the versions you downloaded in the app.', 'small muted'));
+
+	if (pos.book == null || !bible.books[pos.book]) {
+		const books = el('div', null, 'books');
+		bible.books.forEach((b, i) => {
+			const a = el('button', b.name, 'cell'); a.type = 'button';
+			a.onclick = () => go({ bible: { version, book: i, chapter: 1 } }, 'bible');
+			books.append(a);
+		});
+		pane.append(books);
+		return;
+	}
+	const book = bible.books[pos.book];
+	const ch = Math.min(Math.max(1, pos.chapter || 1), book.chapters.length);
 	const wrap = el('div', null, 'verses-wrap');
-	wrap.append(back, el('div', bible.name, 'label'), el('h2', book.name));
-	const chapters = el('div', null, 'grid');
-	book.chapters.forEach((_, i) => {
-		const a = el('a', String(i + 1), 'cell'); a.href = bibleHash(bible.id, route.book, i + 1);
-		if (i + 1 === route.chapter) a.setAttribute('aria-current', 'true');
-		chapters.append(a);
-	});
-	wrap.append(chapters);
-	const ch = Math.min(Math.max(1, route.chapter || 1), book.chapters.length);
-	const verses = el('div', null, 'verses'); verses.style.marginTop = '1.2rem';
-	verses.append(el('h3', `${book.name} ${ch}`));
+	wrap.append(el('div', bible.name, 'label'), el('h2', `${book.name} ${ch}`));
+	const verses = el('div', null, 'verses');
 	let first = null;
 	book.chapters[ch - 1].forEach((text, i) => {
 		const n = i + 1; const p = el('p');
-		const sup = el('sup', String(n)); p.append(sup, text);
-		if (route.verse && n >= route.verse && n <= (route.verseEnd || route.verse)) { p.className = 'hit'; first ||= p; }
+		p.append(el('sup', String(n)), text);
+		if (pos.verse && n >= pos.verse && n <= (pos.verseEnd || pos.verse)) { p.className = 'hit'; first ||= p; }
 		verses.append(p);
 	});
 	wrap.append(verses);
 	const nav = el('div', null, 'chapnav');
-	const prev = el('button', '← Previous'); prev.disabled = ch <= 1 && route.book === 0;
-	prev.onclick = () => { location.hash = ch > 1 ? bibleHash(bible.id, route.book, ch - 1) : bibleHash(bible.id, route.book - 1, bible.books[route.book - 1].chapters.length); };
-	const next = el('button', 'Next →'); next.disabled = ch >= book.chapters.length && route.book === bible.books.length - 1;
-	next.onclick = () => { location.hash = ch < book.chapters.length ? bibleHash(bible.id, route.book, ch + 1) : bibleHash(bible.id, route.book + 1, 1); };
+	const prev = el('button', '← Previous'); prev.disabled = ch <= 1 && pos.book === 0;
+	prev.onclick = () => go({ bible: ch > 1 ? { version, book: pos.book, chapter: ch - 1 } : { version, book: pos.book - 1, chapter: bible.books[pos.book - 1].chapters.length } }, 'bible');
+	const next = el('button', 'Next →'); next.disabled = ch >= book.chapters.length && pos.book === bible.books.length - 1;
+	next.onclick = () => go({ bible: ch < book.chapters.length ? { version, book: pos.book, chapter: ch + 1 } : { version, book: pos.book + 1, chapter: 1 } }, 'bible');
 	nav.append(prev, next); wrap.append(nav);
 	pane.append(wrap);
-	// To the passage: inside the reading pane on desktop, the page itself on a phone.
+	// To the passage: inside the pane on a desktop, the page itself on a phone.
 	requestAnimationFrame(() => {
-		const target = first || verses;
-		if (wide.matches) pane.scrollTop = Math.max(0, target.offsetTop - pane.offsetTop - (first ? pane.clientHeight / 3 : 0));
-		else window.scrollTo(0, Math.max(0, target.getBoundingClientRect().top + window.scrollY - (first ? window.innerHeight / 3 : 80)));
+		if (!first) { pane.scrollTop = 0; return; }
+		if (wide.matches) pane.scrollTop = Math.max(0, first.offsetTop - pane.offsetTop - pane.clientHeight / 3);
+		else window.scrollTo(0, Math.max(0, first.getBoundingClientRect().top + window.scrollY - window.innerHeight / 3));
 	});
 }
 
-// Following a verse link from a reading: open the version the person reads, at the passage.
-async function openReference(ref) {
-	const { list } = availableBibles();
-	if (!list.length) { alert('This server has no Bible versions yet.'); return; }
-	const id = list.some((b) => b.id === store.get('read.bible')) ? store.get('read.bible') : list[0].id;
-	try {
-		const v = await openVersion(id);
-		const b = bookIndexFor(ref, v);
-		location.hash = b == null ? `#/bible/${encodeURIComponent(id)}` : bibleHash(id, b, Math.min(ref.chapter, v.books[b].chapters.length), ref.verse_start, ref.verse_end);
-	} catch { alert('Could not open the Bible.'); }
+// --- Readings -------------------------------------------------------------------
+function closeButton(which) {
+	const b = el('button', null, 'icon close'); b.type = 'button';
+	b.innerHTML = closeIcon; b.title = which === 'bible' ? 'Close the Bible' : 'Close the reading'; b.setAttribute('aria-label', b.title);
+	b.onclick = () => go(which === 'bible' ? { bible: null } : { entry: null });
+	return b;
 }
 
-// --- Readings -------------------------------------------------------------------
 function renderList(pane, currentId) {
-	const list = entries.filter((e) => kindOf(e) === tab).sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-	if (!list.length) { pane.append(el('p', tab === 'lesson' ? 'No lessons yet.' : 'No daily readings yet.', 'empty')); return; }
+	const list = entries.filter((e) => kindOf(e) === listTab).sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+	if (!list.length) { pane.append(el('p', listTab === 'lesson' ? 'No lessons yet.' : 'No daily readings yet.', 'empty')); return; }
 	for (const e of list) {
-		const a = el('a', null, 'item'); a.href = `#/entry/${e.id}`;
+		const a = el('a', null, 'item'); a.href = hashFor({ entry: e.id, bible: wide.matches ? parseHash().bible : null });
+		a.onclick = (ev) => { ev.preventDefault(); go({ entry: e.id }, 'reading'); };
 		if (e.id === currentId) a.setAttribute('aria-current', 'true');
 		const label = el('div', heading(e), 'label');
 		if (kindOf(e) === 'daily_reading' && e.lesson_number) label.append(el('span', `Lesson ${e.lesson_number}`, 'pill'));
@@ -379,12 +459,13 @@ function bodyParagraphs(e) {
 }
 
 function renderEntry(pane, e) {
-	const back = el('a', '← Back', 'back narrow-only'); back.href = '#';
+	const head = el('div', null, 'pane-head');
+	const back = el('button', '← Back', 'back narrow-only'); back.type = 'button'; back.onclick = () => go({ entry: null }, 'list');
+	head.append(back, el('div', null, 'grow'), closeButton('reading'));
 	const art = el('article');
-	art.append(back, el('div', heading(e), 'label'), el('h2', e.title));
+	art.append(el('div', heading(e), 'label'), el('h2', e.title));
 	if (e.scripture) art.append(el('div', e.scripture, 'muted'));
 	if (e.summary) { const s = el('div', null, 'card'); s.append(el('div', 'Summary', 'label'), el('div', e.summary)); art.append(s); }
-
 	const audio = (e.audio && e.audio.length) ? e.audio : e.has_audio ? [{ voice: '' }] : [];
 	if (audio.length) {
 		const box = el('div', null, 'card player');
@@ -416,12 +497,12 @@ function renderEntry(pane, e) {
 	if (e.body) body.append(...bodyParagraphs(e));
 	else if (e.archived) body.append(el('p', 'Archived on the server: the full text is no longer available here.', 'muted'));
 	art.append(body);
-	pane.append(art);
+	pane.append(head, art);
 	pane.scrollTop = 0;
 }
 
 // --- Settings page ----------------------------------------------------------------
-async function renderSettings(pane) {
+function renderSettings(pane) {
 	const s = el('div', null, 'settings');
 	const back = el('a', '← Back', 'back'); back.href = '#';
 	s.append(back, el('h2', 'Settings'));
@@ -437,7 +518,7 @@ async function renderSettings(pane) {
 	for (const [mode, label] of [['auto', 'System'], ['light', 'Light'], ['dark', 'Dark']]) {
 		const b = el('button', label, 'chip'); b.type = 'button';
 		b.setAttribute('aria-pressed', String((root.dataset.theme || 'auto') === mode));
-		b.onclick = () => { setTheme(mode); renderSettingsInPlace(); };
+		b.onclick = () => { setTheme(mode); render(); };
 		themes.append(b);
 	}
 	s.append(themes);
@@ -450,13 +531,13 @@ async function renderSettings(pane) {
 	for (const t of all) {
 		const b = el('button', `${t.name} ${t.count}`, 'chip'); b.type = 'button';
 		b.setAttribute('aria-pressed', String(t.id === wallTopic));
-		b.onclick = () => { wallTopic = t.id; renderSettingsInPlace(); };
+		b.onclick = () => { wallTopic = t.id; render(); };
 		chips.append(b);
 	}
 	s.append(chips);
 	const grid = el('div', null, 'walls');
 	const none = el('button', 'None', 'wall none'); none.type = 'button';
-	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper)); none.onclick = () => { setWallpaper(null); renderSettingsInPlace(); };
+	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper)); none.onclick = () => { setWallpaper(null); render(); };
 	grid.append(none);
 	for (const w of library.wallpapers.filter((w) => wallTopic === 'all' || w.topic === wallTopic)) {
 		const b = el('button', null, 'wall'); b.type = 'button';
@@ -464,71 +545,118 @@ async function renderSettings(pane) {
 		b.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(w.id)}/thumb")`;
 		b.setAttribute('aria-label', `Wallpaper ${w.id}`);
 		b.setAttribute('aria-pressed', String(root.dataset.wallpaper === w.id));
-		b.onclick = () => { setWallpaper(w.id); renderSettingsInPlace(); };
+		b.onclick = () => { setWallpaper(w.id); render(); };
 		grid.append(b);
 	}
 	s.append(grid);
 
-	const slider = (label, key, cssVar, min, def) => {
+	const slider = (label, key, cssVar, min, def, disabled) => {
 		const row = el('label', null, 'slider small');
 		const input = el('input'); input.type = 'range'; input.min = String(min); input.max = '100'; input.step = '1';
 		const val = el('span', null, 'val');
 		input.value = store.get(key, String(def)); val.textContent = input.value + '%';
-		input.disabled = !root.dataset.wallpaper;
+		input.disabled = disabled;
 		input.oninput = () => { val.textContent = setPercent(cssVar, key, input.value, min) + '%'; };
 		row.append(el('span', label), input, val);
 		return row;
 	};
-	s.append(el('h3', 'Opacity'));
-	if (!root.dataset.wallpaper) s.append(el('p', 'Choose a wallpaper first.', 'small muted'));
-	s.append(slider('Text window', 'read.opacity', '--win', 50, 100));
-	s.append(slider('List items', 'read.itemOpacity', '--item', 0, 100));
+	s.append(el('h3', 'Windows'));
+	s.append(slider('Window opacity', 'read.opacity', '--win', 50, 100, !root.dataset.wallpaper));
+	if (!root.dataset.wallpaper) s.append(el('p', 'The window opacity needs a wallpaper behind it.', 'small muted'));
+	s.append(slider('List item shade', 'read.itemShade', '--shade', 0, 40, false));
+	s.append(el('p', 'How much darker the items in a list (readings, Bible books) are than the window.', 'small muted'));
 	pane.append(s);
 }
-function renderSettingsInPlace() { const top = $('right').scrollTop; render(); $('right').scrollTop = top; }
 
-// --- Routing ---------------------------------------------------------------------
-function route() {
-	const h = location.hash;
-	let m;
-	if (h === '#/settings') return { view: 'settings' };
-	if ((m = /^#\/entry\/(\d+)$/.exec(h))) return { view: 'entry', id: Number(m[1]) };
-	if ((m = /^#\/bible\/([a-z0-9]+)(?:\/(\d+)\/(\d+)(?:\/(\d+)(?:-(\d+))?)?)?$/.exec(h))) {
-		return { view: 'bible', version: decodeURIComponent(m[1]), book: m[2] != null ? Number(m[2]) : null, chapter: m[3] ? Number(m[3]) : null, verse: m[4] ? Number(m[4]) : null, verseEnd: m[5] ? Number(m[5]) : null };
-	}
-	return { view: 'list' };
-}
-
+// --- Drawing ------------------------------------------------------------------------
 function render() {
-	const r = route();
-	if (r.view === 'bible') tab = 'bible';
-	if (r.view === 'entry') { const e = entries.find((x) => x.id === r.id); if (e) tab = kindOf(e); }
-	for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', String(r.view !== 'settings' && b.dataset.tab === tab));
-	const left = $('left'), right = $('right');
-	left.replaceChildren(); right.replaceChildren(); delete right.dataset.empty;
-	$('columns').classList.toggle('single', r.view === 'settings');
-	let detail = false;
-	if (r.view === 'settings') { renderSettings(right); detail = true; }
-	else if (tab === 'bible') {
-		renderBibleLeft(left, r.view === 'bible' ? r : {});
-		renderBibleRight(right, r.view === 'bible' ? r : {});
-		detail = r.view === 'bible' && r.book != null;
-	} else {
-		const e = r.view === 'entry' && entries.find((x) => x.id === r.id && kindOf(x) === tab);
-		renderList(left, e?.id);
-		if (e) { renderEntry(right, e); detail = true; } else right.dataset.empty = 'Choose a reading on the left.';
+	const h = parseHash();
+	document.body.classList.toggle('settings-open', Boolean(h.settings));
+	if (h.settings) { $('settings-pane').replaceChildren(); renderSettings($('settings-pane')); setTabs(null); return; }
+	const entry = h.entry != null ? entries.find((x) => x.id === h.entry) : null;
+	if (entry) listTab = kindOf(entry);
+	// On a phone, show what was opened last; after a reload, the reading wins over the Bible.
+	if (!wide.matches) {
+		if (focus === 'reading' && !entry) focus = h.bible ? 'bible' : 'list';
+		if (focus === 'bible' && !h.bible) focus = entry ? 'reading' : 'list';
+		if (focus === 'list' && entry) focus = 'reading';
+		if (focus === 'list' && h.bible) focus = 'bible';
 	}
-	document.body.classList.toggle('detail', detail);
-	if (!wide.matches && detail) window.scrollTo(0, 0);
+	const listPane = $('list-pane'), readingPane = $('reading-pane'), biblePane = $('bible-pane');
+	listPane.replaceChildren(); readingPane.replaceChildren(); biblePane.replaceChildren();
+	renderList(listPane, entry?.id);
+	if (entry) renderEntry(readingPane, entry);
+	else {
+		const note = el('p', 'Choose a reading on the left.', 'empty');
+		readingPane.append(note);
+	}
+	if (h.bible) renderBible(biblePane, h.bible);
+	const cols = $('columns');
+	cols.classList.toggle('no-bible', !h.bible);
+	cols.classList.toggle('no-reading', Boolean(h.bible) && !entry);
+	for (const [pane, name] of [[listPane, 'list'], [readingPane, 'reading'], [biblePane, 'bible']]) pane.classList.toggle('shown', focus === name);
+	setTabs(h);
+	applySplit();
+	if (!wide.matches && focus !== 'list') window.scrollTo(0, 0);
+}
+function setTabs(h) {
+	for (const b of document.querySelectorAll('[data-tab]')) {
+		const t = b.dataset.tab;
+		let on;
+		if (!h) on = false;
+		else if (t === 'bible') on = wide.matches ? Boolean(h.bible) : focus === 'bible';
+		else on = t === listTab && (wide.matches || focus !== 'bible');
+		b.setAttribute('aria-selected', String(on));
+	}
 }
 window.addEventListener('hashchange', render);
+wide.addEventListener('change', render);
 for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => {
-	tab = b.dataset.tab; store.set('read.tab', tab);
-	const target = tab === 'bible' && bible ? `#/bible/${encodeURIComponent(bible.id)}` : '';
-	if (location.hash !== target) location.hash = target; else render();
+	const t = b.dataset.tab;
+	if (t === 'bible') {
+		const h = parseHash();
+		if (wide.matches && h.bible) { render(); return; }
+		let pos = null; try { pos = JSON.parse(store.get('read.biblePos', 'null')); } catch {}
+		const version = defaultVersion();
+		go({ bible: pos && pos.version === version ? pos : { version: version || 'none', book: null } }, 'bible');
+		return;
+	}
+	listTab = t; store.set('read.tab', t);
+	if (!wide.matches) go({}, 'list'); else render();
 };
 
-// The panes sit under the header on desktop.
+// The divider between the reading and the Bible: drag (or arrow keys) to share the width.
+function applySplit() {
+	const r = Number(getComputedStyle(root).getPropertyValue('--split')) || 0.5;
+	const cols = $('columns');
+	cols.style.setProperty('--split-left', `${r}fr`);
+	cols.style.setProperty('--split-right', `${1 - r}fr`);
+}
+function setSplit(r) {
+	r = Math.max(0.2, Math.min(0.8, r));
+	root.style.setProperty('--split', r);
+	store.set('read.split', r.toFixed(3));
+	applySplit();
+}
+(() => {
+	const handle = $('handle');
+	handle.addEventListener('pointerdown', (ev) => {
+		const reading = $('reading-pane').getBoundingClientRect(), bibleBox = $('bible-pane').getBoundingClientRect();
+		const left = reading.left, total = bibleBox.right - reading.left;
+		handle.setPointerCapture(ev.pointerId); handle.classList.add('dragging');
+		const move = (e) => setSplit((e.clientX - left) / total);
+		const up = () => { handle.classList.remove('dragging'); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
+		handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
+	});
+	handle.addEventListener('keydown', (ev) => {
+		const r = Number(getComputedStyle(root).getPropertyValue('--split')) || 0.5;
+		if (ev.key === 'ArrowLeft') setSplit(r - 0.05); else if (ev.key === 'ArrowRight') setSplit(r + 0.05); else return;
+		ev.preventDefault();
+	});
+	handle.addEventListener('dblclick', () => setSplit(0.5));
+})();
+
+// The panes sit under the header on a desktop.
 function measureTop() { requestAnimationFrame(() => root.style.setProperty('--top-h', $('top').offsetHeight + 'px')); }
 window.addEventListener('resize', measureTop);
 
@@ -541,10 +669,12 @@ Promise.all([
 	loadProfileBibles(),
 ]).then(([list, v, b, w]) => {
 	entries = list.entries || []; voices = v; serverBibles = b.bibles || []; library = w;
+	const h = parseHash();
+	focus = h.entry ? 'reading' : h.bible ? 'bible' : 'list';
 	render();
 	// First visit in this browser: ask who is reading (once, unless they choose a name).
 	if (!profile && store.get('read.askedProfile') !== '1') askProfile();
-}).catch(() => { $('left').replaceChildren(el('p', 'Could not load the readings. Try again in a moment.', 'empty')); });
+}).catch(() => { $('list-pane').replaceChildren(el('p', 'Could not load the readings. Try again in a moment.', 'empty')); });
 </script>
 </body>
 </html>

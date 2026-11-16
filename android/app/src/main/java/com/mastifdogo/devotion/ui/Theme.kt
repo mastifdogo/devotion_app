@@ -110,11 +110,11 @@ fun barContainerColor(hasWallpaper: Boolean): Color =
 
 /**
  * Fill of the list item cards inside the text window (entry cards, Bible chapters, books and
- * versions): surfaceContainer at the list item opacity; at 0% only their outline remains.
+ * versions). The cards draw no colour of their own, so they show the window's colour at the
+ * window's opacity; this black tint on top makes them darker: 0% = same as the window (only the
+ * outline shows), 100% = black at 22% over it, in light and dark theme alike.
  */
-@Composable
-fun itemCardFill(opacity: Float): Color =
-    MaterialTheme.colorScheme.surfaceContainer.copy(alpha = WindowLogic.clampItemOpacity(opacity))
+fun itemCardFill(shade: Float): Color = Color.Black.copy(alpha = WindowLogic.shadeAlpha(shade))
 
 /**
  * The text window. With an app wallpaper: a rounded surface at [opacity] (clamped to 50..100%),

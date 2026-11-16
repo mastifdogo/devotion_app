@@ -131,7 +131,7 @@ private fun EntriesTab(vm: MainViewModel, tab: EntryTab, cards: Boolean) {
                         heading = EntryKinds.heading(entry, locale, zone),
                         audioCached = vm.isAudioCached(entry),
                         audioAvailable = vm.playerOffer(entry) is PlayerOffer.Play,
-                        itemFill = itemCardFill(vm.listItemOpacity),
+                        itemFill = itemCardFill(vm.listItemShade),
                         downloading = vm.isAudioDownloading(entry),
                         onClick = { vm.open(Screen.Detail(entry.id)) },
                     )

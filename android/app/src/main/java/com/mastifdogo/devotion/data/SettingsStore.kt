@@ -100,10 +100,20 @@ class SettingsStore(context: Context) {
         get() = prefs.getFloat(KEY_WINDOW_OPACITY, 1f)
         set(value) = prefs.edit().putFloat(KEY_WINDOW_OPACITY, value).apply()
 
-    /** Opacity of the list item cards inside the text window, 0..1 (default 1). */
-    var listItemOpacity: Float
+    /**
+     * Raw "list item shade" (stored under the old opacity key; see WindowLogic.migrateShade).
+     * Unset reads as 1.0, the old default.
+     */
+    val listItemShadeRaw: Float
         get() = prefs.getFloat(KEY_ITEM_OPACITY, 1f)
-        set(value) = prefs.edit().putFloat(KEY_ITEM_OPACITY, value).apply()
+
+    /** True once the shade was saved under its new meaning. */
+    val listItemShadeMigrated: Boolean
+        get() = prefs.getBoolean(KEY_ITEM_SHADE_MIGRATED, false)
+
+    fun setListItemShade(value: Float) {
+        prefs.edit().putFloat(KEY_ITEM_OPACITY, value).putBoolean(KEY_ITEM_SHADE_MIGRATED, true).apply()
+    }
 
     /** Topic chip selected on the Wallpapers screen ("" = All). */
     var wallTopic: String
@@ -179,6 +189,7 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_URL = "wallpaper_url"
         const val KEY_WINDOW_OPACITY = "text_window_opacity"
         const val KEY_ITEM_OPACITY = "list_item_opacity"
+        const val KEY_ITEM_SHADE_MIGRATED = "list_item_shade_v2"
         const val KEY_WALL_TOPIC = "wall_topic"
         const val KEY_AUTO_SYNC = "auto_sync"
         const val KEY_DAILY_SYNC = "daily_sync_minutes"
