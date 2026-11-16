@@ -45,7 +45,23 @@ a.choice:focus-visible { outline:3px solid var(--ink); outline-offset:2px; }
 	<a class="choice secondary" href="/admin" id="admin">Sign in to the admin panel<small>Settings, Gmail, voices, wallpapers</small></a>
 </main>
 <script>
-if (document.documentElement.dataset.wallpaper) document.body.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(document.documentElement.dataset.wallpaper)}")`;
+const show = (id) => { document.body.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(id)}")`; };
+let randomTopic = null; try { randomTopic = localStorage.getItem('read.wallRandom'); } catch {}
+if (randomTopic) {
+	// "New each time" (chosen in the reader's settings): a random wallpaper from that topic, kept for the reader.
+	const last = document.documentElement.dataset.wallpaper;
+	fetch('/api/wallpapers').then((r) => r.json()).then((lib) => {
+		let pool = (lib.wallpapers || []).filter((w) => randomTopic === 'all' || w.topic === randomTopic);
+		if (!pool.length) pool = lib.wallpapers || [];
+		const others = pool.filter((w) => w.id !== last);
+		const from = others.length ? others : pool;
+		if (!from.length) throw new Error('none');
+		const id = from[Math.floor(Math.random() * from.length)].id;
+		document.documentElement.dataset.wallpaper = id;
+		try { localStorage.setItem('read.wallpaper', id); sessionStorage.setItem('wallFresh', '1'); } catch {}
+		show(id);
+	}).catch(() => { if (last) show(last); });
+} else if (document.documentElement.dataset.wallpaper) show(document.documentElement.dataset.wallpaper);
 // A new server has no admin password yet: say that the admin panel sets one up.
 fetch('/admin/api/session').then((r) => r.json()).then((s) => {
 	if (s.needs_setup) document.getElementById('admin').firstChild.textContent = 'Set up the admin panel';

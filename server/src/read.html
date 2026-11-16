@@ -305,6 +305,19 @@ function setWallpaper(id) {
 	store.set('read.wallpaper', id || null);
 	applyWallpaper();
 }
+// "A new one each time": a random wallpaper from the chosen topic whenever the website is opened.
+// read.wallRandom holds the topic ('all' or a topic id); unset means a fixed wallpaper (or none).
+function pickRandomWallpaper() {
+	const topic = store.get('read.wallRandom', null);
+	if (!topic) return false;
+	let pool = library.wallpapers.filter((w) => topic === 'all' || w.topic === topic);
+	if (!pool.length) pool = library.wallpapers;
+	const others = pool.filter((w) => w.id !== root.dataset.wallpaper);
+	const from = others.length ? others : pool;
+	if (!from.length) return false;
+	setWallpaper(from[Math.floor(Math.random() * from.length)].id);
+	return true;
+}
 function setPercent(varName, key, pct, min) {
 	const v = Math.max(min, Math.min(100, Math.round(Number(pct))));
 	root.style.setProperty(varName, v / 100);
@@ -880,18 +893,31 @@ function renderSettings(pane) {
 	s.append(chips);
 	const grid = el('div', null, 'walls');
 	const none = el('button', 'None', 'wall none'); none.type = 'button';
-	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper)); none.onclick = () => { setWallpaper(null); render(); };
+	const randomOn = Boolean(store.get('read.wallRandom', null));
+	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper && !randomOn)); none.onclick = () => { store.set('read.wallRandom', null); setWallpaper(null); render(); };
 	grid.append(none);
+	if (library.wallpapers.length) {
+		const rnd = el('button', 'New each time', 'wall none'); rnd.type = 'button';
+		rnd.title = 'A random wallpaper' + (wallTopic === 'all' ? '' : ' from this topic') + ' every time the website is opened';
+		rnd.setAttribute('aria-pressed', String(randomOn));
+		rnd.onclick = () => { store.set('read.wallRandom', wallTopic); pickRandomWallpaper(); render(); };
+		grid.append(rnd);
+	}
 	for (const w of library.wallpapers.filter((w) => wallTopic === 'all' || w.topic === wallTopic)) {
 		const b = el('button', null, 'wall'); b.type = 'button';
 		b.style.backgroundColor = w.colors?.[0] || '';
 		b.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(w.id)}/thumb")`;
 		b.setAttribute('aria-label', `Wallpaper ${w.id}`);
-		b.setAttribute('aria-pressed', String(root.dataset.wallpaper === w.id));
-		b.onclick = () => { setWallpaper(w.id); render(); };
+		b.setAttribute('aria-pressed', String(!randomOn && root.dataset.wallpaper === w.id));
+		b.onclick = () => { store.set('read.wallRandom', null); setWallpaper(w.id); render(); };
 		grid.append(b);
 	}
 	s.append(grid);
+	if (randomOn) {
+		const t = store.get('read.wallRandom', 'all');
+		const name = library.topics.find((x) => x.id === t)?.name;
+		s.append(el('p', `A new wallpaper${name ? ` from “${name}”` : ''} is chosen each time the website is opened. Choose one above to keep it instead.`, 'small muted'));
+	}
 
 	const slider = (label, key, cssVar, min, def, disabled) => {
 		const row = el('label', null, 'slider small');
@@ -1009,7 +1035,11 @@ function setSplit(r) {
 function measureTop() { requestAnimationFrame(() => root.style.setProperty('--top-h', $('top').offsetHeight + 'px')); }
 window.addEventListener('resize', measureTop);
 
-applyWallpaper();
+// With "new each time" the wallpaper is chosen once the list has loaded, so the old one never flashes.
+const randomWall = Boolean(store.get('read.wallRandom', null));
+let freshFromStart = false;
+try { freshFromStart = sessionStorage.getItem('wallFresh') === '1'; sessionStorage.removeItem('wallFresh'); } catch {}
+if (!randomWall || freshFromStart) applyWallpaper();
 Promise.all([
 	getJson('/api/entries'),
 	getJson('/api/voices').catch(() => ({ voices: [], default: null })),
@@ -1019,6 +1049,8 @@ Promise.all([
 	loadNotes(),
 ]).then(([list, v, b, w]) => {
 	entries = list.entries || []; voices = v; serverBibles = b.bibles || []; library = w;
+	// The start page has just chosen one; otherwise choose now (or show the last one if none can be).
+	if (randomWall && !freshFromStart && !pickRandomWallpaper()) applyWallpaper();
 	const h = parseHash();
 	focus = h.entry ? 'reading' : h.bible ? 'bible' : 'list';
 	render();
