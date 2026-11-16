@@ -2,6 +2,10 @@ package com.mastifdogo.devotion
 
 import android.app.Application
 import android.app.WallpaperManager
+import android.content.ComponentName
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,12 +14,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.MediaMetadata
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.data.AppJson
 import com.mastifdogo.devotion.data.AudioVariant
@@ -42,6 +48,8 @@ import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
+import com.mastifdogo.devotion.logic.MiniPlayerLogic
+import com.mastifdogo.devotion.logic.NowPlaying
 import com.mastifdogo.devotion.logic.PlayerOffer
 import com.mastifdogo.devotion.logic.ServerAddress
 import com.mastifdogo.devotion.logic.ServerWallpaper
@@ -55,10 +63,13 @@ import com.mastifdogo.devotion.ui.ThemeMode
 import com.mastifdogo.devotion.update.ReleaseAsset
 import com.mastifdogo.devotion.update.UpdateCheck
 import com.mastifdogo.devotion.update.UpdateLogic
+import com.mastifdogo.devotion.playback.PlaybackService
 import com.mastifdogo.devotion.sync.SyncScheduler
 import com.mastifdogo.devotion.update.Updater
 import coil.ImageLoader
 import java.io.File
+import java.time.ZoneId
+import java.util.Locale
 import java.util.UUID
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
@@ -221,7 +232,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val speed = sanitizeSpeed(value)
         playbackSpeed = speed
         settings.playbackSpeed = speed
-        player?.setPlaybackSpeed(speed)
+        controller?.setPlaybackSpeed(speed)
     }
 
     val canSlowDown: Boolean
@@ -905,10 +916,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ---- playback ---------------------------------------------------------------------------
+    //
+    // The ExoPlayer lives in PlaybackService (so audio survives leaving the app); this is a
+    // MediaController connected to it. It is connected when the ViewModel is created, which also
+    // lets a new ViewModel pick up audio that is already playing, and released in onCleared.
 
-    private var player: ExoPlayer? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var controller: MediaController? = null
     private var positionJob: Job? = null
     private var pendingPlay: Pair<Long, String>? = null
+
+    /** A start request made before the controller was connected; run once it is. */
+    private var afterConnect: (() -> Unit)? = null
+
+    /** The media notification asked for the playing entry before the controller was connected. */
+    private var openPlayingWhenConnected = false
 
     /** Entry currently loaded in the player, if any. */
     var playerEntryId: Long? by mutableStateOf(null)
@@ -923,6 +945,105 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var durationMs: Long by mutableStateOf(0L)
         private set
 
+    /**
+     * Android 13+: true once, the first time the user presses play, so the UI asks for the
+     * notification permission (for the media notification). Playback works without it.
+     */
+    var askNotificationPermission: Boolean by mutableStateOf(false)
+        private set
+
+    fun notificationPermissionHandled() {
+        askNotificationPermission = false
+    }
+
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            this@MainViewModel.isPlaying = isPlaying
+            refreshPosition()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                // Rewind so the next Play starts from the beginning.
+                controller?.let {
+                    it.pause()
+                    it.seekTo(0L)
+                }
+            }
+            refreshPosition()
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            adoptCurrentItem()
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            audioError = "Playback failed: ${error.message ?: error.errorCodeName}"
+        }
+    }
+
+    /** Connects to PlaybackService (starting it if needed). Safe to call more than once. */
+    private fun connectController() {
+        if (controllerFuture != null) return
+        val app = getApplication<Application>()
+        try {
+            val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
+            val future = MediaController.Builder(app, token).buildAsync()
+            controllerFuture = future
+            future.addListener(
+                {
+                    try {
+                        val connected = future.get()
+                        controller = connected
+                        connected.addListener(playerListener)
+                        adoptCurrentItem()
+                        startPositionTicker()
+                        val pending = afterConnect
+                        afterConnect = null
+                        pending?.invoke()
+                        if (openPlayingWhenConnected) {
+                            openPlayingWhenConnected = false
+                            openPlayingEntry()
+                        }
+                    } catch (e: Exception) {
+                        // Cancelled (ViewModel cleared) or the service could not be reached.
+                        if (controllerFuture === future) controllerFuture = null
+                        if (afterConnect != null) {
+                            afterConnect = null
+                            audioError = "Could not start the audio player: ${describe(e)}"
+                        }
+                    }
+                },
+                ContextCompat.getMainExecutor(app),
+            )
+        } catch (e: Exception) {
+            controllerFuture = null
+            afterConnect = null
+            audioError = "Could not start the audio player: ${describe(e)}"
+        }
+    }
+
+    /** Takes over what the session is playing (e.g. started before this ViewModel existed). */
+    private fun adoptCurrentItem() {
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) return
+        val playing = MiniPlayerLogic.parseMediaId(c.currentMediaItem?.mediaId) ?: return
+        playerEntryId = playing.first
+        playerVoice = playing.second
+        isPlaying = c.isPlaying
+        refreshPosition()
+    }
+
+    private fun startPositionTicker() {
+        if (positionJob?.isActive == true) return
+        positionJob = viewModelScope.launch {
+            while (isActive) {
+                refreshPosition()
+                delay(500L)
+            }
+        }
+    }
+
     /** Play/pause for [entry] in its current voice; downloads that audio first when needed. */
     fun playPause(entry: Entry) {
         val voice = voiceFor(entry)
@@ -930,18 +1051,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             audioError = "No audio for this entry."
             return
         }
-        val current = player
-        if (current != null && playerEntryId == entry.id && playerVoice == voice) {
-            if (current.isPlaying) {
-                current.pause()
-            } else {
-                if (current.playbackState == Player.STATE_IDLE) current.prepare()
-                if (current.playbackState == Player.STATE_ENDED) current.seekTo(0L)
-                current.play()
-            }
+        if (controller != null && playerEntryId == entry.id && playerVoice == voice) {
+            togglePlayback()
             return
         }
         audioError = null
+        requestNotificationPermissionOnce()
         pendingPlay = entry.id to voice
         viewModelScope.launch {
             val ok = ensureAudio(entry, voice, reportErrors = true).await()
@@ -952,16 +1067,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Play/pause of whatever is loaded (the mini player's button). */
+    fun togglePlayback() {
+        val c = controller ?: return
+        if (c.isPlaying) {
+            c.pause()
+        } else {
+            requestNotificationPermissionOnce()
+            if (c.playbackState == Player.STATE_IDLE) c.prepare()
+            if (c.playbackState == Player.STATE_ENDED) c.seekTo(0L)
+            c.play()
+        }
+    }
+
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < 33 || settings.notificationPermissionAsked) return
+        settings.notificationPermissionAsked = true
+        val granted = ContextCompat.checkSelfPermission(getApplication<Application>(), POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) askNotificationPermission = true
+    }
+
     fun seekTo(ms: Long) {
-        val p = player ?: return
+        val c = controller ?: return
         val upper = if (durationMs > 0) durationMs else Long.MAX_VALUE
-        p.seekTo(ms.coerceIn(0L, upper))
+        c.seekTo(ms.coerceIn(0L, upper))
         refreshPosition()
     }
 
     fun skip(deltaMs: Long) {
-        val p = player ?: return
-        seekTo(p.currentPosition + deltaMs)
+        val c = controller ?: return
+        seekTo(c.currentPosition + deltaMs)
     }
 
     private fun startPlayback(id: Long, voice: String, startMs: Long, play: Boolean) {
@@ -971,11 +1107,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             audioError = "The audio file is missing; please try again."
             return
         }
-        val p = ensurePlayer()
-        p.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)), startMs)
-        p.setPlaybackSpeed(playbackSpeed)
-        p.prepare()
-        if (play) p.play()
+        val c = controller
+        if (c == null) {
+            // Not connected yet: start as soon as the controller is there.
+            afterConnect = { startPlayback(id, voice, startMs, play) }
+            connectController()
+            return
+        }
+        val entry = entryById(id)
+        val heading = entry?.let { EntryKinds.heading(it, Locale.getDefault(), ZoneId.systemDefault()) }
+        val uri = Uri.fromFile(file)
+        val item = MediaItem.Builder()
+            .setMediaId(MiniPlayerLogic.mediaId(id, voice))
+            .setUri(uri)
+            // The URI itself does not travel to the session; the service restores it from here.
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            // Shown by the media notification and the lock screen.
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(MiniPlayerLogic.notificationTitle(heading, entry?.title))
+                    .setArtist(MiniPlayerLogic.notificationSubtitle(heading))
+                    .build(),
+            )
+            .build()
+        c.setMediaItem(item, startMs)
+        c.setPlaybackSpeed(playbackSpeed)
+        c.prepare()
+        if (play) c.play()
         playerEntryId = id
         playerVoice = voice
         positionMs = startMs
@@ -984,7 +1142,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun stopPlayback() {
         pendingPlay = null
-        player?.let {
+        afterConnect = null
+        controller?.let {
             it.stop()
             it.clearMediaItems()
         }
@@ -995,51 +1154,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         durationMs = 0L
     }
 
-    private fun ensurePlayer(): ExoPlayer {
-        player?.let { return it }
-        val created = ExoPlayer.Builder(getApplication<Application>()).build()
-        val attributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
-            .build()
-        created.setAudioAttributes(attributes, true)
-        created.setHandleAudioBecomingNoisy(true)
-        created.setPlaybackSpeed(playbackSpeed)
-        created.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                this@MainViewModel.isPlaying = isPlaying
-                refreshPosition()
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
-                    // Rewind so the next Play starts from the beginning.
-                    created.pause()
-                    created.seekTo(0L)
-                }
-                refreshPosition()
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                audioError = "Playback failed: ${error.message ?: error.errorCodeName}"
-            }
-        })
-        player = created
-        positionJob = viewModelScope.launch {
-            while (isActive) {
-                refreshPosition()
-                delay(500L)
-            }
-        }
-        return created
+    private fun refreshPosition() {
+        val c = controller ?: return
+        if (playerEntryId == null) return
+        positionMs = c.currentPosition.coerceAtLeast(0L)
+        val duration = c.duration
+        durationMs = if (duration == C.TIME_UNSET || duration < 0L) 0L else duration
     }
 
-    private fun refreshPosition() {
-        val p = player ?: return
-        if (playerEntryId == null) return
-        positionMs = p.currentPosition.coerceAtLeast(0L)
-        val duration = p.duration
-        durationMs = if (duration == C.TIME_UNSET || duration < 0L) 0L else duration
+    // ---- mini player ------------------------------------------------------------------------
+
+    /** Shown on every screen but the playing entry's own, while playing or paused part-way. */
+    val miniPlayerVisible: Boolean
+        get() = MiniPlayerLogic.isVisible(playerEntryId, (screen as? Screen.Detail)?.id, isPlaying, positionMs)
+
+    /** The two lines describing what is loaded in the player. */
+    val nowPlaying: NowPlaying
+        get() {
+            val entry = playerEntryId?.let { entryById(it) }
+            val heading = entry?.let { EntryKinds.heading(it, Locale.getDefault(), ZoneId.systemDefault()) }
+            return MiniPlayerLogic.nowPlaying(heading, entry?.title)
+        }
+
+    /** The mini player's close button: stops playback (the service leaves the foreground). */
+    fun stopFromMiniPlayer() {
+        stopPlayback()
+    }
+
+    /** Opens the entry that is playing (mini player title, media notification). */
+    fun openPlayingEntry() {
+        if (controller == null) {
+            openPlayingWhenConnected = true
+            return
+        }
+        val id = playerEntryId ?: return
+        if (entryById(id) != null) screen = Screen.Detail(id)
     }
 
     // ---- Bible ------------------------------------------------------------------------------
@@ -1723,6 +1872,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         downloadedBibles = bibleStore.downloaded()
         loadProfileContext()
         loadAppWallpaper()
+        // Also picks up audio that is already playing in the background.
+        connectController()
         if (selectedTab == EntryTab.BIBLE) enterBibleTab()
         // Keep the background work in line with the setting (also after an app update).
         applySchedule()
@@ -1736,8 +1887,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         if (wallLoaderCreated) imageLoader.shutdown()
         positionJob?.cancel()
-        player?.release()
-        player = null
+        // Release the controller (and a connection still in flight); the service keeps playing.
+        controller?.removeListener(playerListener)
+        controller = null
+        controllerFuture?.let { MediaController.releaseFuture(it) }
+        controllerFuture = null
         super.onCleared()
     }
 
@@ -1753,6 +1907,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         val PLAYBACK_SPEEDS: List<Float> = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+
+        /** Manifest.permission.POST_NOTIFICATIONS (API 33). */
+        const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
 
         private fun sanitizeSpeed(value: Float): Float =
             PLAYBACK_SPEEDS.minByOrNull { kotlin.math.abs(it - value) } ?: 1f

@@ -452,7 +452,7 @@ private fun PlayerBar(vm: MainViewModel, entry: Entry, inWindow: Boolean) {
 
 /** "−  1.25×  +": steps through the playback speeds (disabled at the ends). */
 @Composable
-private fun SpeedControl(vm: MainViewModel) {
+fun SpeedControl(vm: MainViewModel) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(
             onClick = { vm.stepPlaybackSpeed(-1) },

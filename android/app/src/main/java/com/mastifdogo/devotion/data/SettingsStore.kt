@@ -159,6 +159,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_WALL_TOPICS, "") ?: ""
         set(value) = prefs.edit().putString(KEY_WALL_TOPICS, value).apply()
 
+    /** True once the app has asked for the notification permission (Android 13+), so it asks only once. */
+    var notificationPermissionAsked: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, value).apply()
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -198,6 +203,7 @@ class SettingsStore(context: Context) {
         const val KEY_WALL_ON_START = "wallpaper_new_on_start"
         const val KEY_WALL_START_TOPIC = "wallpaper_start_topic"
         const val KEY_WALL_TOPICS = "wallpaper_topics_cache"
+        const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"
