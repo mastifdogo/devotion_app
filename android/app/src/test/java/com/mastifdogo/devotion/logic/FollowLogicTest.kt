@@ -124,13 +124,14 @@ class FollowLogicTest {
         // 0.4 px per frame: a whole pixel every third frame, nothing lost.
         var carry = 0f
         var scrolled = 0
-        repeat(10) {
+        repeat(9) {
             val s = FollowLogic.step(carry, 0.4f)
             scrolled += s.pixels
             carry = s.carry
         }
+        // 9 x 0.4 = 3.6: three whole pixels scrolled, 0.6 still carried.
         assertEquals(3, scrolled)
-        assertEquals(1.0f, carry + scrolled - 3f, 1e-4f)
+        assertEquals(3.6f, scrolled + carry, 1e-4f)
         assertEquals(ScrollStep(2, 0.5f), FollowLogic.step(0.25f, 2.25f))
         // Upward (negative) movement carries too.
         val up = FollowLogic.step(-0.5f, -0.75f)
