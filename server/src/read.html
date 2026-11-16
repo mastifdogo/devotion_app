@@ -81,6 +81,10 @@ select option { background:var(--card); color:var(--ink); }
 :root:not([data-wallpaper]) .follow { background:color-mix(in srgb, var(--bg), #000 calc(var(--shade) * 10%)); }
 .follow[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); font-weight:600; }
 .follow[aria-pressed="true"]::before { content:'✓ '; }
+.scrollctl { display:inline-flex; align-items:center; gap:.3rem; }
+.follow.step { min-width:2.1rem; padding:.3rem 0; text-align:center; font-weight:600; }
+.follow.step:disabled { opacity:.4; cursor:default; }
+.follow[hidden] { display:none; }
 
 /* Highlights and comments, shared with the app */
 .hl-yellow { background:var(--hl-yellow); } .hl-green { background:var(--hl-green); } .hl-blue { background:var(--hl-blue); } .hl-pink { background:var(--hl-pink); }
@@ -848,11 +852,13 @@ function renderEntry(pane, e) {
 		load(false);
 		box.append(player);
 		if (audio.length > 1) box.append(voiceSel);
-		const follow = el('button', 'Follow', 'follow'); follow.type = 'button';
-		follow.title = 'Scroll along with the voice';
-		box.append(follow, speedSel);
+		box.append(scrollControl(pane, e, player), speedSel);
 		art.append(box);
-		followAlong(pane, e, player, follow);
+	} else if (e.body) {
+		// No audio: only the auto scroll.
+		const box = el('div', null, 'card player');
+		box.append(scrollControl(pane, e, null));
+		art.append(box);
 	}
 	const body = el('div', null, 'body');
 	if (e.body) {
@@ -867,67 +873,132 @@ function renderEntry(pane, e) {
 	pane.scrollTop = 0;
 }
 
-// Follow along: once the voice has read as far as the middle of the screen, the text scrolls to
-// keep the words being read there, to the end. Scrolling by hand lets go; the button takes hold again.
-// There are no word timings, so the place is worked out from how far through the audio it is.
-function followAlong(pane, e, player, button) {
-	let on = store.get('read.follow', '0') === '1';
-	let lastAuto = 0;
-	const show = () => { button.setAttribute('aria-pressed', String(on)); };
+// The scroll control, between the voice and the speed. While the audio plays it is "Follow": once
+// the voice has read as far as the middle of the screen, the text glides to keep the words being
+// read there, to the end (there are no word timings, so the place is worked out from how far
+// through the audio it is). While nothing plays it is "Auto scroll", with − and + for its pace.
+// Scrolling by hand lets go; the button takes hold again. The screen is kept awake meanwhile.
+const AUTO_SPEEDS = [8, 12, 16, 22, 30, 40, 55, 75]; // pixels a second
+function scrollControl(pane, e, player) {
+	const wrap = el('span', null, 'scrollctl');
+	const slower = el('button', '−', 'follow step'); slower.type = 'button'; slower.title = 'Slower'; slower.setAttribute('aria-label', 'Scroll slower');
+	const button = el('button', null, 'follow'); button.type = 'button';
+	const faster = el('button', '+', 'follow step'); faster.type = 'button'; faster.title = 'Faster'; faster.setAttribute('aria-label', 'Scroll faster');
+	wrap.append(slower, button, faster);
+
+	const playing = () => Boolean(player) && !player.paused && !player.ended;
+	let follow = store.get('read.follow', '0') === '1'; // holding on to the voice
+	let auto = false; // scrolling at a steady pace
+	let speed = Math.max(0, Math.min(AUTO_SPEEDS.length - 1, Number(store.get('read.autoSpeed', '3')) || 0));
+	let target = 0, carry = 0, last = 0, lastLook = 0, frame = 0, lock = null;
+
+	const active = () => (playing() ? follow : auto);
+	const show = () => {
+		const p = playing();
+		button.textContent = p ? 'Follow' : 'Auto scroll';
+		button.title = p ? 'Scroll along with the voice' : 'Scroll the text at a steady pace';
+		button.setAttribute('aria-pressed', String(active()));
+		slower.hidden = faster.hidden = p;
+		slower.disabled = speed <= 0; faster.disabled = speed >= AUTO_SPEEDS.length - 1;
+		awake();
+	};
+	// Keeps the screen on while it scrolls (browsers only allow this on https or localhost).
+	const awake = () => {
+		const want = active() && !document.hidden && button.isConnected;
+		if (want && !lock && navigator.wakeLock) navigator.wakeLock.request('screen').then((l) => { lock = l; l.addEventListener('release', () => { if (lock === l) lock = null; }); if (!active()) awake(); }).catch(() => {});
+		else if (!want && lock) { lock.release().catch(() => {}); lock = null; }
+	};
 	// The pane scrolls on a desktop; the page on a phone.
 	const scroller = () => (wide.matches ? pane : document.scrollingElement);
+	const view = () => (wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight });
 	const spokenY = () => {
 		const d = player.duration;
 		if (!d || !Number.isFinite(d) || !e.body) return null;
 		const intro = e.speech_offset || 0;
 		const at = Math.max(0, Math.min(e.body.length, (player.currentTime / d) * (intro + e.body.length) - intro));
-		const spans = pane.querySelectorAll('.body [data-s]');
-		for (const sp of spans) {
-			const s0 = Number(sp.dataset.s), e0 = Number(sp.dataset.e);
-			if (at > e0 || !sp.firstChild) continue;
+		for (const sp of pane.querySelectorAll('.body [data-s]')) {
+			if (at > Number(sp.dataset.e) || !sp.firstChild) continue;
 			const r = document.createRange();
-			const off = Math.max(0, Math.min(sp.firstChild.length, Math.round(at - s0)));
+			const off = Math.max(0, Math.min(sp.firstChild.length, Math.round(at - Number(sp.dataset.s))));
 			r.setStart(sp.firstChild, off); r.setEnd(sp.firstChild, off);
 			const box = r.getClientRects()[0] || sp.getBoundingClientRect();
 			return box.top + box.height / 2;
 		}
 		return null;
 	};
-	const step = () => {
-		if (!on || !button.isConnected || player.paused) return;
-		const y = spokenY();
-		if (y == null) return;
+	// One step each frame: whole pixels now, the fraction carried to the next frame, so it glides.
+	const move = (px) => {
+		carry += px;
+		const whole = Math.trunc(carry);
+		if (whole < 1) return;
+		carry -= whole;
 		const sc = scroller();
-		const view = wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight };
-		const delta = y - (view.top + view.height / 2);
-		// Nothing moves until the voice reaches the middle; then it stays there.
-		if (delta <= 2) return;
-		lastAuto = Date.now();
-		sc.scrollBy({ top: delta, behavior: 'smooth' });
+		const before = sc.scrollTop;
+		sc.scrollTop = before + whole;
+		return sc.scrollTop !== before;
 	};
-	const timer = setInterval(() => { if (!button.isConnected) { clearInterval(timer); cleanup(); return; } step(); }, 500);
-	// A wheel, touch or key scroll by the reader lets go (the scrolling this does itself is not theirs).
-	const letGo = () => { if (on && button.isConnected) { on = false; show(); } };
+	const tick = (now) => {
+		frame = 0;
+		if (!button.isConnected) { stop(); return; }
+		const dt = Math.min(0.1, last ? (now - last) / 1000 : 0);
+		last = now;
+		if (playing()) {
+			if (follow) {
+				// Where the voice is, looked up a few times a second; the distance to it closes smoothly.
+				if (now - lastLook > 250) {
+					lastLook = now;
+					const y = spokenY();
+					const v = view();
+					target = y == null ? 0 : Math.max(0, y - (v.top + v.height / 2));
+				}
+				if (target > 0.5) {
+					const step = Math.min(target, Math.max(target * 2.5, 12) * dt);
+					target -= step;
+					move(step);
+				}
+			}
+		} else if (auto) {
+			const sc = scroller();
+			if (move(AUTO_SPEEDS[speed] * dt) === false || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1) { auto = false; show(); }
+		}
+		if (active()) frame = requestAnimationFrame(tick);
+	};
+	const run = () => { show(); if (active() && !frame) { last = 0; lastLook = 0; carry = 0; frame = requestAnimationFrame(tick); } };
+
+	// A wheel, touch, key or scrollbar drag by the reader lets go (the scrolling this does itself is not theirs).
+	const letGo = () => { if (!button.isConnected || !active()) return; if (playing()) follow = false; else auto = false; show(); };
 	const onKey = (ev) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(ev.key) && !ev.target.closest?.('input, textarea, select, button, audio')) letGo(); };
-	const target = () => (wide.matches ? pane : window);
-	const bound = target();
+	const onDown = (ev) => { if (ev.target === pane || ev.target === document.documentElement) letGo(); };
+	const onVisible = () => awake();
+	const bound = wide.matches ? pane : window;
 	bound.addEventListener('wheel', letGo, { passive: true });
 	bound.addEventListener('touchmove', letGo, { passive: true });
+	bound.addEventListener('mousedown', onDown);
 	window.addEventListener('keydown', onKey);
-	// Dragging the scrollbar: a scroll that this did not start.
-	const onScroll = () => { if (Date.now() - lastAuto > 1200 && on && !player.paused && scrollbarDrag) letGo(); };
-	let scrollbarDrag = false;
-	const down = (ev) => { scrollbarDrag = ev.target === pane || ev.target === document.documentElement; };
-	const up = () => { scrollbarDrag = false; };
-	bound.addEventListener('scroll', onScroll, { passive: true });
-	bound.addEventListener('mousedown', down); window.addEventListener('mouseup', up);
-	function cleanup() {
-		bound.removeEventListener('wheel', letGo); bound.removeEventListener('touchmove', letGo); window.removeEventListener('keydown', onKey);
-		bound.removeEventListener('scroll', onScroll); bound.removeEventListener('mousedown', down); window.removeEventListener('mouseup', up);
+	document.addEventListener('visibilitychange', onVisible);
+	function stop() {
+		bound.removeEventListener('wheel', letGo); bound.removeEventListener('touchmove', letGo); bound.removeEventListener('mousedown', onDown);
+		window.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVisible);
+		clearInterval(watch);
+		if (lock) { lock.release().catch(() => {}); lock = null; }
 	}
-	button.onclick = () => { on = !on; store.set('read.follow', on ? '1' : '0'); show(); if (on) step(); };
-	player.addEventListener('play', () => { if (store.get('read.follow', '0') === '1' && !on) { on = true; show(); } });
+	// The reading was closed or redrawn: tidy up.
+	const watch = setInterval(() => { if (!button.isConnected) stop(); }, 2000);
+
+	button.onclick = () => {
+		if (playing()) { follow = !follow; store.set('read.follow', follow ? '1' : '0'); } else auto = !auto;
+		run();
+	};
+	const setSpeed = (n) => { speed = Math.max(0, Math.min(AUTO_SPEEDS.length - 1, n)); store.set('read.autoSpeed', String(speed)); show(); };
+	slower.onclick = () => setSpeed(speed - 1);
+	faster.onclick = () => setSpeed(speed + 1);
+	if (player) {
+		// Starting the audio turns auto scroll into following; when it stops, the scrolling stops.
+		player.addEventListener('play', () => { if (auto || store.get('read.follow', '0') === '1') follow = true; auto = false; run(); });
+		for (const ev of ['pause', 'ended']) player.addEventListener(ev, () => show());
+	}
 	show();
+	return wrap;
 }
 
 // --- Settings page ----------------------------------------------------------------
