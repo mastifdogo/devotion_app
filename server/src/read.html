@@ -116,7 +116,6 @@ select option { background:var(--card); color:var(--ink); }
 .cell { padding:.45rem .7rem; cursor:pointer; font-size:.95rem; text-decoration:none; display:block; }
 .verses p { margin:0 0 .5em; }
 .verses sup { color:var(--muted); font-size:.7em; margin-right:.25em; }
-.verses p.reading { background:color-mix(in srgb, var(--accent) 16%, transparent); border-radius:6px; box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
 .verses.can-start sup { cursor:pointer; color:var(--accent); padding:.3em .2em; }
 .verses .hit { background:var(--mark); border-radius:4px; box-shadow:0 0 0 3px var(--mark); }
 .chapnav { display:flex; justify-content:space-between; gap:.5rem; margin-top:1rem; }
@@ -513,7 +512,7 @@ function renderBible(pane, pos) {
 
 // Listening to a chapter: the server reads it the first time anyone asks, which takes a moment;
 // until it is ready the server answers "making" and this asks again. The server also says when
-// each verse is heard, so the verse being read is marked and kept in view, and a verse's number
+// each verse is heard, so the verse being read is kept in view (it is not marked), and a verse's number
 // starts the reading there.
 function listenCard(pane, version, book, chapter, versesBox) {
 	const url = `/api/bibles/${encodeURIComponent(version)}/audio/${book}/${chapter}`;
@@ -534,12 +533,10 @@ function listenCard(pane, version, book, chapter, versesBox) {
 	box._mark = () => {
 		const host = versesBox();
 		if (!host) return;
-		for (const p of host.querySelectorAll('p.reading')) p.classList.remove('reading');
 		host.classList.toggle('can-start', loaded || bibleAudio);
 		if (current == null) return;
 		const p = host.querySelector(`p[data-v="${current}"]`);
 		if (!p) return;
-		p.classList.add('reading');
 		if (follow && !player.paused) {
 			const r = p.getBoundingClientRect();
 			const view = wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight };
