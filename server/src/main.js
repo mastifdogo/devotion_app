@@ -13,6 +13,7 @@ import { Bibles } from './bibles.js';
 import { Archiver } from './archive.js';
 import { Wallpapers } from './wallpapers.js';
 import { Backups, takePendingRestore } from './backup.js';
+import { BibleAudio } from './bibleaudio.js';
 import { createServer } from './server.js';
 
 const config = loadConfig();
@@ -38,9 +39,10 @@ const tts = new Tts({ settings, audioDir, voices });
 const archiver = new Archiver({ db, settings, audioDir });
 const wallpapers = new Wallpapers({ db, dataDir: config.dataDir });
 const backups = new Backups({ db, settings, dataDir: config.dataDir });
+const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: config.dataDir });
 const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver });
 const updater = new Updater({ config, settings });
-const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups, audioDir });
+const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups, bibleAudio, audioDir });
 
 pipeline.adoptLegacyAudio();
 pipeline.reclassify();

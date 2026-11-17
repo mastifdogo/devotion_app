@@ -17,6 +17,7 @@ import { Updater } from '../src/update.js';
 import { createServer } from '../src/server.js';
 import { Voices } from '../src/voices.js';
 import { Bibles } from '../src/bibles.js';
+import { BibleAudio, chapterText } from '../src/bibleaudio.js';
 import { Archiver } from '../src/archive.js';
 import { Wallpapers } from '../src/wallpapers.js';
 import { plan } from '../src/resources.js';
@@ -83,6 +84,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const bibles = new Bibles({ db, dataDir: dir, fetchImpl: webFetch, catalog: bibleCatalog });
 	const speechFetch = async (url, init) => {
 		calls.speech.push({ url: String(url), auth: init.headers.authorization, body: JSON.parse(init.body) });
+		if (calls.failSpeech) return new Response(calls.failSpeech, { status: 500 });
 		return new Response(Buffer.alloc(4096, 9), { status: 200 });
 	};
 	const tts = new Tts({ settings, audioDir, voices, runImpl, fetchImpl: speechFetch, planImpl: (provider) => plan({ cores: 1, memoryMb: 1024, usableMb: 819 }, provider) });
@@ -125,7 +127,8 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const wallpapers = new Wallpapers({ db, dataDir: dir, fetchImpl: whFetch, log: quiet });
 	const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver, log: quiet });
 	const updater = new Updater({ config, settings, fetchImpl: async (url, init) => { calls.github.push({ url: String(url), headers: init.headers }); return github(); } });
-	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, audioDir, log: quiet });
+	const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: dir, log: quiet });
+	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, bibleAudio, audioDir, log: quiet });
 	await new Promise((r) => server.listen(0, '127.0.0.1', r));
 	const base = `http://127.0.0.1:${server.address().port}`;
 	t.after(() => { server.close(); server.closeAllConnections(); db.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -333,6 +336,21 @@ test('premium speech for lessons, daily readings, or both', async (t) => {
 	assert.deepEqual(list.map((e) => [e.kind, e.preferred_voice]).sort(), [['daily_reading', 'api-nova'], ['lesson', 'api-nova']]);
 	await new Promise((r) => setTimeout(r, 50));
 	assert.equal(calls.speech.length, speechBefore + 1);
+
+	// The choice per kind: lessons by a speech server on the owner's network, daily readings back on Piper.
+	let state = await (await call('/admin/api/state')).json();
+	assert.deepEqual(state.engines, { readings_engine: 'openai', lessons_engine: 'openai', bible_engine: 'none' });
+	await call('/admin/api/settings', { body: { lessons_engine: 'local', readings_engine: 'piper', tts_local_base_url: 'http://tts.lan:8880/v1', tts_local_model: 'kokoro', tts_local_voice: 'af_heart', bible_engine: 'bogus' } });
+	await wait((l) => l.find((e) => e.kind === 'lesson').audio.some((a) => a.voice === 'local-af_heart'));
+	list = await entries();
+	assert.deepEqual(list.map((e) => [e.kind, e.preferred_voice]).sort(), [['daily_reading', null], ['lesson', 'local-af_heart']]);
+	assert.deepEqual([calls.speech.at(-1).url, calls.speech.at(-1).auth, calls.speech.at(-1).body.model], ['http://tts.lan:8880/v1/audio/speech', undefined, 'kokoro']);
+	assert.deepEqual((await (await call('/api/voices')).json()), { voices: [{ id: 'voice', name: 'voice', description: '' }, { id: 'local-af_heart', name: 'Local (af_heart)', description: 'Speech server on this network', lessons_only: true }], default: 'voice' });
+	state = await (await call('/admin/api/state')).json();
+	assert.deepEqual(state.engines, { readings_engine: 'piper', lessons_engine: 'local', bible_engine: 'none' });
+	// No audio for lessons at all.
+	await call('/admin/api/settings', { body: { lessons_engine: 'none' } });
+	assert.equal((await (await call('/api/voices')).json()).voices.length, 1);
 });
 
 test('a lesson is sorted from its subject, not by the model, and can be corrected by hand', async (t) => {
@@ -652,10 +670,10 @@ test('profiles, and notes and highlights kept per profile', async (t) => {
 });
 
 test('bible versions: checked, converted, listed and served to the app', async (t) => {
-	const { call, base } = await setup(t);
+	const { call, base, calls, settings } = await setup(t);
 	assert.equal((await call('/admin/api/bibles/tst/install', { body: {} })).status, 401);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	assert.deepEqual(await (await call('/api/bibles')).json(), { bibles: [] });
+	assert.deepEqual(await (await call('/api/bibles')).json(), { bibles: [], audio: false });
 	assert.equal((await call('/admin/api/bibles/nope/install', { body: {} })).status, 404);
 	assert.equal((await call('/admin/api/bibles/tst/install', { body: {} })).status, 202);
 	assert.equal((await call('/admin/api/bibles/bad/install', { body: {} })).status, 202);
@@ -679,6 +697,48 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	// Chapters in order, verses by number (a missing verse keeps its place), whitespace tidied.
 	assert.deepEqual(await gz.json(), { id: 'tst', name: 'Test Version', language: 'xx', books: [{ name: 'I Book', chapters: [['In the beginning', '', 'third'], ['c2v1']] }] });
 	assert.equal((await call('/api/bibles/nope')).status, 404);
+
+	// Listening: off until an engine is chosen for the Bible; then a chapter is made when first asked for, and kept.
+	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 404);
+	assert.equal(chapterText('John', 3, ['a', '', 'c']), 'John, chapter 3.\n\na\nc');
+	assert.equal(chapterText('Psalms', 23, ['x']), 'Psalm 23.\n\nx');
+	assert.equal(chapterText('Jude', 1, ['x']), 'Jude.\n\nx');
+	await call('/admin/api/settings', { body: { piper_model: '/voice.onnx', bible_engine: 'piper' } });
+	assert.equal((await (await call('/api/bibles')).json()).audio, true);
+	assert.equal((await call('/api/bibles/tst/audio/0/9')).status, 404);
+	assert.equal((await call('/api/bibles/nope/audio/0/1')).status, 404);
+	const listen = async (url) => { let r; for (let i = 0; i < 100; i++) { r = await call(url); if (r.status !== 202) break; assert.deepEqual(await r.json(), { status: 'making' }); await new Promise((res) => setTimeout(res, 10)); } return r; };
+	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 202);
+	let heard = await listen('/api/bibles/tst/audio/0/1');
+	assert.deepEqual([heard.status, heard.headers.get('content-type'), heard.headers.get('content-length')], [200, 'audio/mpeg', '2048']);
+	assert.equal(calls.run.filter((c) => c.cmd === 'piper').at(-1).input, 'I Book, chapter 1.\nIn the beginning\nthird\n');
+	const runs = calls.run.length;
+	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 200); // kept: not made again
+	assert.equal(calls.run.length, runs);
+	state = await (await call('/admin/api/state')).json();
+	assert.deepEqual([state.bible_audio, state.engines.bible_engine], [{ files: 1, bytes: 2048 }, 'piper']);
+	// A local speech server (OpenAI's API on the owner's network, no key): its own voice, its own files.
+	await call('/admin/api/settings', { body: { bible_engine: 'local' } });
+	assert.equal((await (await call('/api/bibles')).json()).audio, true); // falls back to piper until an address is set
+	await call('/admin/api/settings', { body: { tts_local_base_url: 'ftp://nope', tts_local_voice: 'Bella' } });
+	assert.equal(settings.get('tts_local_base_url'), '');
+	await call('/admin/api/settings', { body: { tts_local_base_url: 'http://192.168.1.50:8880/v1/' } });
+	heard = await listen('/api/bibles/tst/audio/0/2');
+	assert.deepEqual([heard.status, heard.headers.get('content-length')], [200, '4096']);
+	assert.deepEqual([calls.speech.at(-1).url, calls.speech.at(-1).auth, calls.speech.at(-1).body.voice, calls.speech.at(-1).body.model, calls.speech.at(-1).body.input], ['http://192.168.1.50:8880/v1/audio/speech', undefined, 'Bella', 'kokoro', 'I Book, chapter 2.\n\nc2v1']);
+	// A failure is reported once, and asking again tries again.
+	calls.failSpeech = 'model not loaded';
+	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 202);
+	heard = await listen('/api/bibles/tst/audio/0/1');
+	assert.equal(heard.status, 502);
+	assert.match((await heard.json()).error, /local speech server answered 500: model not loaded/);
+	calls.failSpeech = null;
+	assert.equal((await listen('/api/bibles/tst/audio/0/1')).status, 200);
+	state = await (await call('/admin/api/bible-audio/clear', { body: {} })).json();
+	assert.deepEqual(state.bible_audio, { files: 0, bytes: 0 });
+	await call('/admin/api/settings', { body: { bible_engine: 'none' } });
+	assert.equal((await (await call('/api/bibles')).json()).audio, false);
+
 	await call('/admin/api/bibles/tst/delete', { body: {} });
 	assert.equal((await call('/api/bibles/tst')).status, 404);
 });

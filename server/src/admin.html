@@ -146,41 +146,44 @@ section.off { display:none; }
 
 <section data-tab="audio">
 	<h2>Audio</h2>
-	<label for="tts_provider">Voice engine</label>
-	<select id="tts_provider" data-setting>
-		<option value="piper">Piper (runs on this server)</option>
-		<option value="openai">OpenAI-compatible speech API</option>
-		<option value="none">No audio</option>
-	</select>
-	<div data-for="piper">
-		<label>Voices (about 60 MB each to download)</label>
-		<div class="scroll"><table id="voices"></table></div>
+	<p class="small muted">Choose what reads each kind of text. Piper runs on this server. A speech API is a service on the internet (OpenAI's, or one that works the same way). A local speech server is a text-to-speech model you run yourself on your network (Kokoro-FastAPI, openedai-speech, LocalAI and others that speak OpenAI's speech API).</p>
+	<div class="grid">
+		<div><label for="readings_engine">Daily readings are read by</label><select id="readings_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">No audio</option></select></div>
+		<div><label for="lessons_engine">Lessons are read by</label><select id="lessons_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">No audio</option></select></div>
+		<div><label for="bible_engine">The Bible is read by</label><select id="bible_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">Off (no listening in the Bible)</option></select></div>
 	</div>
+	<p class="small muted">Entries are read when they arrive. A Bible chapter is read the first time someone presses Listen on it (that first time takes a moment, longer with Piper on a small server) and is kept on the server after that. <span id="bible-audio-kept"></span> <button class="plain small" id="bible-audio-clear" hidden>Remove the kept Bible audio</button></p>
 	<label for="tts_rate">Speaking pace</label>
 	<select id="tts_rate" data-setting style="max-width:14rem">
 		<option value="slow">Slower</option><option value="normal">Normal</option><option value="fast">Faster</option>
 	</select>
-	<p class="small muted">Every entry is read in every voice on the server, and each person picks the voice they listen to in the app; the default voice is what they hear until they choose. A newly downloaded voice is made for existing entries in the background. A new pace applies to audio made from now on: use "Redo audio" on an entry to hear it on an existing one.</p>
 	<div data-for="piper">
-		<label>Premium voice (from a speech API)</label>
+		<h3>Piper</h3>
+		<label>Voices (about 60 MB each to download)</label>
+		<div class="scroll"><table id="voices"></table></div>
+		<p class="small muted">What Piper reads is made in every voice here, and each person picks the voice they listen to in the app; the default voice is what they hear until they choose (and what reads the Bible). A newly downloaded voice is made for existing entries in the background.</p>
+	</div>
+	<div data-for="openai">
+		<h3>Speech API</h3>
 		<div class="grid">
-			<div><label for="premium_lessons">Lessons</label><select id="premium_lessons" data-setting>
-				<option value="off">Off: read by the voices above</option>
-				<option value="on">On: read by the premium voice</option>
-			</select></div>
-			<div><label for="premium_readings">Daily readings</label><select id="premium_readings" data-setting>
-				<option value="off">Off: read by the voices above</option>
-				<option value="on">On: read by the premium voice</option>
-			</select></div>
+			<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
+			<div><label for="tts_openai_key">API key</label><input id="tts_openai_key" data-setting data-secret type="password" autocomplete="off"></div>
+			<div><label for="tts_openai_model">Model</label><input id="tts_openai_model" data-setting autocomplete="off"></div>
+			<div><label for="tts_openai_voice">Voice</label><input id="tts_openai_voice" data-setting autocomplete="off"></div>
 		</div>
-		<p class="small muted" id="premium-note" hidden>What is switched on is sent to the speech service below and read in its voice instead of the server's voices; the rest stays on this server. The speech service bills the account its API key belongs to, by the length of each entry; people using the app or the website are never charged. Existing entries get the premium voice in the background after you save, and people hear it for them automatically.</p>
+		<p class="small muted">The text is sent to this service and read in its voice. The service bills the account its API key belongs to; people using the app or the website are never charged. Without a key, Piper reads instead.</p>
 	</div>
-	<div data-for="openai" class="grid">
-		<div><label for="tts_openai_base_url">API base URL</label><input id="tts_openai_base_url" data-setting autocomplete="off"></div>
-		<div><label for="tts_openai_key">API key</label><input id="tts_openai_key" data-setting data-secret type="password" autocomplete="off"></div>
-		<div><label for="tts_openai_model">Model</label><input id="tts_openai_model" data-setting autocomplete="off"></div>
-		<div><label for="tts_openai_voice">Voice</label><input id="tts_openai_voice" data-setting autocomplete="off"></div>
+	<div data-for="local">
+		<h3>Local speech server</h3>
+		<div class="grid">
+			<div><label for="tts_local_base_url">Address</label><input id="tts_local_base_url" data-setting placeholder="http://192.168.1.50:8880/v1" autocomplete="off"></div>
+			<div><label for="tts_local_model">Model</label><input id="tts_local_model" data-setting autocomplete="off"></div>
+			<div><label for="tts_local_voice">Voice</label><input id="tts_local_voice" data-setting autocomplete="off"></div>
+			<div><label for="tts_local_key">API key (most need none)</label><input id="tts_local_key" data-setting data-secret type="password" autocomplete="off"></div>
+		</div>
+		<p class="small muted">The address of the server's OpenAI-style API, ending in <code>/v1</code>; this server must be able to reach it. Nothing leaves your network. Until an address is saved, Piper reads instead.</p>
 	</div>
+	<p class="small muted">A change applies to audio made from now on, and entries that have none in the new voice get it in the background; use "Redo audio" on an entry to remake it.</p>
 	<div class="row"><button data-save>Save</button></div>
 </section>
 
@@ -322,15 +325,16 @@ function fillForm() {
 	fillTimeZones();
 	for (const input of document.querySelectorAll('[data-setting]')) {
 		if (input.dataset.secret !== undefined) { input.value = ''; input.placeholder = state.settings[input.id + '_set'] ? 'saved (leave empty to keep)' : 'not set'; }
-		else input.value = state.settings[input.id] ?? '';
+		else input.value = state.engines?.[input.id] ?? state.settings[input.id] ?? '';
 	}
 	showEngine();
 }
+const usesPiper = () => Object.values(state.engines || {}).includes('piper');
+const usesAudio = () => [state.engines?.readings_engine, state.engines?.lessons_engine].some((e) => e && e !== 'none');
 function showEngine() {
-	const p = $('tts_provider').value, premium = p === 'piper' && ($('premium_lessons').value === 'on' || $('premium_readings').value === 'on');
-	// The speech API's settings are also needed for the premium voice.
-	for (const d of document.querySelectorAll('[data-for]')) d.hidden = d.dataset.for !== p && !(d.dataset.for === 'openai' && premium);
-	$('premium-note').hidden = !premium;
+	// Each engine's settings show while something is read by it.
+	const used = new Set([...document.querySelectorAll('[data-engine]')].map((e) => e.value));
+	for (const d of document.querySelectorAll('[data-for]')) d.hidden = !used.has(d.dataset.for);
 }
 
 // Correcting an entry's tab, lesson number, date or title in place.
@@ -361,11 +365,11 @@ function render() {
 	else s.append(el('p', p.running ? 'Checking mail now…' : 'Ready. Last check: ' + when(p.last_run), 'ok'));
 	if (!p.not_ready && p.last_error) s.append(el('p', 'Last check failed: ' + p.last_error, 'bad'));
 	if (p.last_result && !p.last_error) s.append(el('p', `Last check: ${p.last_result.found} matching emails, ${p.last_result.processed} new, ${p.last_result.errors} failed, ${p.last_result.audio} audio files made.`, 'muted small'));
-	if (p.audio_not_ready && state.settings.tts_provider !== 'none') s.append(el('p', 'No audio is being made: ' + p.audio_not_ready, 'bad'));
+	if (p.audio_not_ready && usesAudio()) s.append(el('p', 'No audio is being made: ' + p.audio_not_ready, 'bad'));
 	if (p.audio_progress) s.append(el('p', `Making audio in the background: ${p.audio_progress.done} of ${p.audio_progress.total} done. This uses the CPU fully while it runs; the pages and the app keep working.`, 'muted small'));
 	const r = state.resources;
-	s.append(el('p', `This server has ${r.cores} CPU core${r.cores === 1 ? '' : 's'} and ${r.memory_mb} MB of memory. ${r.note}`, r.audio_jobs === 0 && state.settings.tts_provider === 'piper' ? 'bad small' : 'muted small'));
-	if (r.audio_jobs === 1 && r.memory_mb < 900 && state.settings.tts_provider === 'piper') {
+	s.append(el('p', `This server has ${r.cores} CPU core${r.cores === 1 ? '' : 's'} and ${r.memory_mb} MB of memory. ${r.note}`, r.audio_jobs === 0 && usesPiper() ? 'bad small' : 'muted small'));
+	if (r.audio_jobs === 1 && r.memory_mb < 900 && usesPiper()) {
 		s.append(el('p', 'It fits, with little to spare: 1 GB is more comfortable. On the Proxmox host: pct set <container number> -memory 1024 (the server notices by itself).', 'muted small'));
 	}
 
@@ -415,6 +419,10 @@ function render() {
 	as.textContent = !a.configured ? 'No share is set, so every entry stays on the server.'
 		: a.last_error ? 'The last archive run failed: ' + a.last_error
 		: `${a.archived_total} archived so far, ${a.waiting} waiting${a.running ? ' (archiving now…)' : ''}.` + (a.last_run ? ' Last run: ' + when(a.last_run) : '');
+
+	const ba = state.bible_audio;
+	$('bible-audio-kept').textContent = ba && ba.files ? `${ba.files} chapter${ba.files === 1 ? '' : 's'} kept (${(ba.bytes / 1048576).toFixed(1)} MB).` : '';
+	$('bible-audio-clear').hidden = !(ba && ba.files);
 
 	const k = state.backup, ks = $('backup-status');
 	if (k) {
@@ -488,9 +496,8 @@ $('password-form').onsubmit = act(async () => {
 	$('pw-current').value = $('pw-new').value = ''; toast('Password changed.');
 });
 $('logout').onclick = act(async () => { await api('/admin/api/logout', {}); showLogin(); });
-$('tts_provider').onchange = showEngine;
-$('premium_lessons').onchange = showEngine;
-$('premium_readings').onchange = showEngine;
+for (const e of document.querySelectorAll('[data-engine]')) e.onchange = showEngine;
+$('bible-audio-clear').onclick = act(async () => { state = await api('/admin/api/bible-audio/clear', {}); render(); toast('Removed. Chapters are read again when someone listens.'); });
 $('theme').value = document.documentElement.dataset.theme || 'auto';
 $('theme').onchange = () => {
 	const t = $('theme').value;

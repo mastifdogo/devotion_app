@@ -28,6 +28,15 @@ export const DEFAULTS = {
 	// With Piper as the engine: read lessons and/or daily readings with the speech API instead (a premium voice).
 	premium_lessons: 'off', // off | on
 	premium_readings: 'off', // off | on
+	// What reads each kind of text: piper | openai | local | none. Empty: as set up before there was a choice (above).
+	readings_engine: '',
+	lessons_engine: '',
+	bible_engine: '', // empty: none (the Bible is read aloud on demand, chapter by chapter)
+	// A speech server on the owner's network that speaks OpenAI's /audio/speech API (Kokoro-FastAPI, openedai-speech, LocalAI...).
+	tts_local_base_url: '', // http://192.168.1.50:8880/v1
+	tts_local_key: '', // most need none
+	tts_local_model: 'kokoro',
+	tts_local_voice: 'af_heart',
 	github_token: '',
 	// Entries older than this many days are moved to the SMB share.
 	archive_days: '30',
@@ -48,7 +57,7 @@ export const DEFAULTS = {
 };
 
 // Never sent back to the browser; the admin page only learns whether they are set.
-export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password', 'backup_smb_password']);
+export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password', 'backup_smb_password', 'tts_local_key']);
 // Managed by the server itself, not by the settings form.
 const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot', 'backup_last_slot']);
 
@@ -105,6 +114,8 @@ export class Settings {
 			if (key === 'backup_keep' && !/^[1-9]\d{0,2}$/.test(v)) continue;
 			if (key === 'timezone' && !validTimeZone(v)) continue;
 			if (key === 'tts_provider' && !['piper', 'openai', 'none'].includes(v)) continue;
+			if (['readings_engine', 'lessons_engine', 'bible_engine'].includes(key) && !['piper', 'openai', 'local', 'none'].includes(v)) continue;
+			if (key === 'tts_local_base_url' && v !== '' && !/^https?:\/\/[^\s"'<>]+$/i.test(v)) continue;
 			if ((key === 'premium_lessons' || key === 'premium_readings') && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;
 			if (key === 'archive_days' && !/^[1-9]\d{0,3}$/.test(v)) continue;

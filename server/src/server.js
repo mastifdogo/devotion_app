@@ -56,7 +56,7 @@ function parseRefs(text) {
  * heard in; has_audio / audio_bytes / audio_sha256 describe the default voice,
  * for apps from before there was a choice.
  */
-export function entryJson(row, audio = [], defaultVoice = '', serverDefault = defaultVoice) {
+export function entryJson(row, audio = [], defaultVoice = '', pinnedVoice = null) {
 	const main = audio.find((a) => a.voice === defaultVoice) || audio[0];
 	return {
 		id: row.id,
@@ -68,8 +68,8 @@ export function entryJson(row, audio = [], defaultVoice = '', serverDefault = de
 		summary: row.summary ?? '',
 		body: row.body,
 		references: parseRefs(row.refs),
-		// Where the listener's default differs from the server's (a premium voice for its kind).
-		preferred_voice: defaultVoice !== serverDefault && audio.some((a) => a.voice === defaultVoice) ? defaultVoice : null,
+		// Set when this kind of entry is read by a speech API: its voice is the one to play, whatever the listener chose.
+		preferred_voice: pinnedVoice && audio.some((a) => a.voice === pinnedVoice) ? pinnedVoice : null,
 		// How many characters the voice reads before the body (title, date, reference), for following along.
 		speech_offset: row.body ? speechText(row).length - row.body.length : 0,
 		has_audio: Boolean(main),
@@ -137,7 +137,7 @@ export function annotationWins(stored, incoming) {
 	return true;
 }
 
-export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups = null, audioDir, log = console }) {
+export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups = null, bibleAudio = null, audioDir, log = console }) {
 	const sessions = new Map(); // sid -> expiry
 	let loginFailures = 0;
 	let lastBackgroundError = null; // shown once by the admin page, then cleared
@@ -208,6 +208,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	const adminState = async () => ({
 		voices: await voices.list(),
 		background_error: (() => { const e = lastBackgroundError; lastBackgroundError = null; return e; })(),
+		bible_audio: bibleAudio ? await bibleAudio.usage() : null,
 		...adminStateSync(),
 	});
 	const adminStateSync = () => ({
@@ -239,6 +240,8 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		bibles: bibles.list(),
 		archive: { ...archiver.status, configured: archiver.configured(), running: archiver.running, waiting: archiver.due().length, archived_total: db.prepare('SELECT COUNT(*) AS n FROM entries WHERE archived_at IS NOT NULL AND deleted_at IS NULL').get().n },
 		backup: backups ? backups.view() : null,
+		// What reads each kind of text now, and the Bible chapters kept as audio.
+		engines: { readings_engine: tts.chosenEngine?.('daily_reading'), lessons_engine: tts.chosenEngine?.('lesson'), bible_engine: tts.chosenEngine?.('bible') },
 	});
 
 	const audioRows = db.prepare('SELECT voice, file, bytes, sha256 FROM entry_audio WHERE entry_id = ? AND file IS NOT NULL ORDER BY voice');
@@ -252,7 +255,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		return rows.map((r) => {
 			const audio = r.deleted_at || r.archived_at ? [] : byEntry.get(r.id) || [];
 			const preferred = tts.preferredVoiceFor ? tts.preferredVoiceFor(r, audio.map((a) => a.voice)) : def;
-			return entryJson(r, audio, preferred, def);
+			return entryJson(r, audio, preferred, tts.pinnedVoiceFor?.(r) ?? null);
 		});
 	};
 
@@ -384,7 +387,18 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	});
 
 	// Bible versions stored on this server, for the app to download.
-	route('GET', /^\/api\/bibles$/, (req, res) => send(res, 200, { bibles: bibles.installed() }));
+	// "audio" says whether chapters can be listened to (see the audio route below).
+	route('GET', /^\/api\/bibles$/, (req, res) => send(res, 200, { bibles: bibles.installed(), audio: Boolean(bibleAudio?.enabled()) }));
+
+	// A chapter read aloud (book from 0, chapter from 1): the MP3 once it exists; until then
+	// 202 while it is being made, which the first request starts.
+	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})$/, async (req, res, m) => {
+		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
+		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]));
+		if (got.state !== 'ready') return send(res, 202, { status: 'making' }, { 'retry-after': '3' });
+		res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': got.bytes, etag: `"${got.etag}"`, 'cache-control': 'private, max-age=31536000, immutable' });
+		createReadStream(got.file).on('error', () => res.destroy()).pipe(res);
+	});
 
 	route('GET', /^\/api\/bibles\/([a-z0-9]+)$/, async (req, res, m) => {
 		const bible = bibles.get(m[1]);
@@ -475,13 +489,13 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	route('POST', /^\/admin\/api\/settings$/, async (req, res) => {
 		requireAdmin(req);
-		const premiumBefore = tts.premiumState?.() ?? '';
+		const premiumBefore = tts.engineState?.() ?? '';
 		settings.applyForm(await readJson(req));
-		const premiumNow = tts.premiumState?.() ?? '';
+		const premiumNow = tts.engineState?.() ?? '';
 		if (premiumNow !== premiumBefore) {
 			// Entries change voice: apps re-read the entries, and missing audio is made in the background.
 			pipeline.touchAll();
-			if (premiumNow) background(pipeline.fillAudio(), 'Premium audio');
+			background(pipeline.fillAudio(), 'Audio');
 		}
 		send(res, 200, await adminState());
 	});
@@ -633,10 +647,19 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	route('POST', /^\/admin\/api\/bibles\/([a-z0-9]+)\/(install|delete)$/, async (req, res, m) => {
 		requireAdmin(req);
 		await readJson(req);
-		if (m[2] === 'delete') await bibles.remove(m[1]);
-		else if (!bibles.list().some((b) => b.id === m[1])) throw new HttpError(404, 'No such Bible version.');
+		if (m[2] === 'delete') {
+			await bibles.remove(m[1]);
+			await bibleAudio?.removeVersion(m[1]);
+		} else if (!bibles.list().some((b) => b.id === m[1])) throw new HttpError(404, 'No such Bible version.');
 		else background(bibles.install(m[1]), 'Bible download');
 		send(res, 202, await adminState());
+	});
+
+	route('POST', /^\/admin\/api\/bible-audio\/clear$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		if (bibleAudio) await bibleAudio.clear();
+		send(res, 200, await adminState());
 	});
 
 	const searchOptions = (b) => ({
