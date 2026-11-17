@@ -124,3 +124,17 @@ test('the audio plan follows the cores and memory the server has', () => {
 	const here = detect();
 	assert.ok(here.cores >= 1 && here.memoryMb > 0 && here.usableMb > 0 && here.usableMb <= here.memoryMb);
 });
+
+test('mp3Duration walks the frames; parseWav reads streamed WAVs', async () => {
+	const { mp3Duration, parseWav, wavFile } = await import('../src/tts.js');
+	// MPEG-2 layer III, 64 kbit/s at 24 kHz: 192-byte frames of 576 samples.
+	const frame = Buffer.alloc(192); frame.set([0xff, 0xf3, 0x84, 0xc4]);
+	const id3 = Buffer.alloc(10 + 20); id3.write('ID3', 0, 'latin1'); id3[9] = 20;
+	assert.equal(Math.round(mp3Duration(Buffer.concat([id3, ...Array(100).fill(frame)])) * 1000), 2400);
+	assert.equal(mp3Duration(Buffer.alloc(500, 7)), 0);
+	const wav = wavFile({ rate: 8000, channels: 1 }, [Buffer.alloc(16000, 1)]);
+	assert.deepEqual([parseWav(wav).rate, parseWav(wav).data.length], [8000, 16000]);
+	wav.writeUInt32LE(0xffffffff, 40); // a streamed file does not know its size
+	assert.equal(parseWav(wav).data.length, 16000);
+	assert.throws(() => parseWav(Buffer.alloc(100, 1)));
+});

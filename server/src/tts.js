@@ -4,7 +4,8 @@
 //   openai  any service that speaks OpenAI's /v1/audio/speech API.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { currentPlan } from './resources.js';
 
@@ -95,6 +96,61 @@ function run(cmd, args, { input, timeoutMs = 15 * 60 * 1000 } = {}) {
 		child.stdin.on('error', () => {}); // the close handler reports the failure
 		child.stdin.end(input ?? '');
 	});
+}
+
+/** The engine can't give one sound per part (an old piper, a speech server without WAV): the caller falls back. */
+class PartsUnsupported extends Error {}
+
+/** A WAV file's sound: { rate, channels, data } with data 16-bit PCM. Throws PartsUnsupported for anything else. */
+export function parseWav(buf) {
+	if (buf.length < 44 || buf.toString('latin1', 0, 4) !== 'RIFF' || buf.toString('latin1', 8, 12) !== 'WAVE') throw new PartsUnsupported('not a WAV file');
+	let at = 12, fmt = null;
+	while (at + 8 <= buf.length) {
+		const id = buf.toString('latin1', at, at + 4);
+		const size = buf.readUInt32LE(at + 4);
+		if (id === 'fmt ') fmt = { format: buf.readUInt16LE(at + 8), channels: buf.readUInt16LE(at + 10), rate: buf.readUInt32LE(at + 12), bits: buf.readUInt16LE(at + 22) };
+		if (id === 'data') {
+			if (!fmt || fmt.format !== 1 || fmt.bits !== 16 || !fmt.channels || !fmt.rate) throw new PartsUnsupported('not 16-bit PCM');
+			// A streamed WAV has no real size in its header: the sound is the rest of the file.
+			const end = size === 0 || size === 0xffffffff || at + 8 + size > buf.length ? buf.length : at + 8 + size;
+			const frame = 2 * fmt.channels;
+			const data = buf.subarray(at + 8, end - ((end - at - 8) % frame));
+			return { rate: fmt.rate, channels: fmt.channels, data };
+		}
+		at += 8 + size + (size % 2);
+	}
+	throw new PartsUnsupported('no sound in the WAV file');
+}
+
+/** A 16-bit PCM WAV file from sound data. */
+export function wavFile({ rate, channels }, chunks) {
+	const size = chunks.reduce((n, c) => n + c.length, 0);
+	const head = Buffer.alloc(44);
+	head.write('RIFF', 0, 'latin1'); head.writeUInt32LE(36 + size, 4); head.write('WAVEfmt ', 8, 'latin1');
+	head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(channels, 22); head.writeUInt32LE(rate, 24);
+	head.writeUInt32LE(rate * channels * 2, 28); head.writeUInt16LE(channels * 2, 32); head.writeUInt16LE(16, 34);
+	head.write('data', 36, 'latin1'); head.writeUInt32LE(size, 40);
+	return Buffer.concat([head, ...chunks]);
+}
+
+/** How long an MP3 plays, in seconds, by walking its frames (0 if it has none). */
+export function mp3Duration(buf) {
+	let at = 0;
+	if (buf.length > 10 && buf.toString('latin1', 0, 3) === 'ID3') at = 10 + ((buf[6] & 127) << 21 | (buf[7] & 127) << 14 | (buf[8] & 127) << 7 | (buf[9] & 127));
+	const rates = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+	const v1 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320], v2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+	let seconds = 0;
+	while (at + 4 <= buf.length) {
+		const h = buf.readUInt32BE(at);
+		const version = (h >>> 19) & 3, layer = (h >>> 17) & 3, bitrateIx = (h >>> 12) & 15, rateIx = (h >>> 10) & 3;
+		if ((h >>> 21) !== 0x7ff || version === 1 || layer !== 1 || bitrateIx === 0 || bitrateIx === 15 || rateIx === 3) { at++; continue; }
+		const rate = rates[version][rateIx], kbps = (version === 3 ? v1 : v2)[bitrateIx], samples = version === 3 ? 1152 : 576;
+		const length = Math.floor((samples / 8) * kbps * 1000 / rate) + ((h >>> 9) & 1);
+		if (length < 24) { at++; continue; }
+		seconds += samples / rate;
+		at += length;
+	}
+	return seconds;
 }
 
 /** A voice id for a speech-API voice: safe in a file name and a URL. */
@@ -273,6 +329,92 @@ export class Tts {
 		return new Promise((resolve, reject) => this.waiters.push(() => start().then(resolve, reject)));
 	}
 
+	/**
+	 * Reads the parts one after another into one MP3 and says when each is
+	 * heard: { file, bytes, sha256, duration, times: [{ start, end }], exact }.
+	 * exact is false when the engine could only read them as one text, and the
+	 * times are then worked out from the parts' lengths.
+	 */
+	synthesizeParts(name, parts, voiceId, dir) {
+		const start = () => {
+			this.active++;
+			return this.partsNow(name, parts, voiceId, dir).finally(() => {
+				this.active--;
+				while (this.waiters.length && this.active < this.jobs()) this.waiters.shift()();
+			});
+		};
+		if (this.active < this.jobs()) return start();
+		return new Promise((resolve, reject) => this.waiters.push(() => start().then(resolve, reject)));
+	}
+
+	async partsNow(name, parts, voiceId, dir) {
+		const engine = this.engineOfVoice(voiceId);
+		const tmp = await mkdtemp(path.join(tmpdir(), 'devotion-parts-'));
+		try {
+			let sounds;
+			try {
+				sounds = engine === 'piper' ? await this.piperParts(parts, voiceId, tmp) : await this.speechApiParts(engine, parts);
+				if (sounds.some((x) => x.rate !== sounds[0].rate || x.channels !== sounds[0].channels)) throw new PartsUnsupported('the parts differ in format');
+			} catch (err) {
+				if (!(err instanceof PartsUnsupported)) throw err;
+				// As one text, with each part's time in proportion to its length.
+				const whole = await this.synthesizeNow(name, parts.join('\n'), voiceId, dir);
+				const duration = mp3Duration(await readFile(path.join(dir, whole.file)));
+				const total = parts.reduce((n, t) => n + t.length + 1, 0);
+				let at = 0;
+				const times = parts.map((t) => ({ start: (at / total) * duration, end: ((at += t.length + 1) / total) * duration }));
+				return { ...whole, duration, times, exact: false };
+			}
+			const { rate, channels } = sounds[0];
+			const perSecond = rate * channels * 2;
+			const gap = Buffer.alloc(Math.round(0.25 * rate) * channels * 2);
+			const chunks = [], times = [];
+			let bytes = 0;
+			sounds.forEach((x, i) => {
+				times.push({ start: bytes / perSecond, end: (bytes + x.data.length) / perSecond });
+				chunks.push(x.data); bytes += x.data.length;
+				if (i < sounds.length - 1) { chunks.push(gap); bytes += gap.length; }
+			});
+			await mkdir(dir, { recursive: true });
+			const wav = path.join(tmp, 'all.wav'), out = path.join(tmp, 'all.mp3');
+			await writeFile(wav, wavFile({ rate, channels }, chunks));
+			await this.run('lame', ['--quiet', '-m', channels === 1 ? 'm' : 'j', '-V', '6', wav, out]);
+			const data = await readFile(out);
+			if (data.length < 256) throw new TtsError('The speech engine produced an empty file.');
+			const file = `${name}.mp3`;
+			await writeFile(path.join(dir, file + '.part'), data);
+			await rename(path.join(dir, file + '.part'), path.join(dir, file));
+			return { file, bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), duration: bytes / perSecond, times, exact: true };
+		} finally {
+			await rm(tmp, { recursive: true, force: true });
+		}
+	}
+
+	/** Piper writes one WAV per line into a folder, named by the time it was made. */
+	async piperParts(parts, voiceId, tmp) {
+		const plan = this.planImpl('piper');
+		if (plan.audioJobs === 0) throw new TtsError(plan.note);
+		if (!this.piperVoices().length) throw new TtsError('No piper voice model is configured.');
+		const model = this.voices ? this.voices.pathFor(voiceId) : this.settings.get('piper_model');
+		const length = { slow: '1.18', normal: '1.0', fast: '0.87' }[this.settings.get('tts_rate')] || '1.0';
+		const out = path.join(tmp, 'lines');
+		await mkdir(out);
+		await this.run(this.settings.get('piper_bin'), ['--model', model, '--length_scale', length, '--sentence_silence', '0.3', '--output_dir', out], { input: parts.map((t) => t.replace(/\s+/g, ' ').trim()).join('\n') + '\n' });
+		const key = (n) => { try { return BigInt(n.replace(/\D/g, '') || '0'); } catch { return 0n; } };
+		const names = (await readdir(out)).filter((n) => n.endsWith('.wav')).sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.localeCompare(b)));
+		if (names.length !== parts.length) throw new PartsUnsupported(`piper wrote ${names.length} files for ${parts.length} lines`);
+		const sounds = [];
+		for (const n of names) sounds.push(parseWav(await readFile(path.join(out, n))));
+		return sounds;
+	}
+
+	/** One request per part, asking for WAV so the parts can be timed and joined. */
+	async speechApiParts(engine, parts) {
+		const sounds = [];
+		for (const part of parts) sounds.push(parseWav(await this.speechApiRequest(engine, part, 'wav')));
+		return sounds;
+	}
+
 	/** Which engine makes this voice: a speech API's own voice id, else Piper. */
 	engineOfVoice(voiceId) {
 		for (const engine of ['local', 'openai']) {
@@ -319,32 +461,34 @@ export class Tts {
 		await this.run('lame', ['--quiet', '-m', 'm', '-V', '6', wav, outFile]);
 	}
 
-	/** OpenAI's /audio/speech API: the service itself ('openai'), or a server on the owner's network that speaks it ('local'). */
-	async speechApi(engine, text, outFile) {
+	/** One call to OpenAI's /audio/speech API: the service itself ('openai'), or a server on the owner's network that speaks it ('local'). */
+	async speechApiRequest(engine, input, format) {
 		const k = engine === 'local' ? 'tts_local_' : 'tts_openai_';
 		const base = this.settings.get(k + 'base_url').replace(/\/+$/, '');
 		const key = this.settings.get(k + 'key');
 		const what = engine === 'local' ? 'local speech server' : 'speech service';
-		const buffers = [];
-		for (const chunk of chunkText(text, 3800)) {
-			let res;
-			try {
-				res = await this.fetch(`${base}/audio/speech`, {
-					method: 'POST',
-					headers: { ...(key ? { authorization: `Bearer ${key}` } : {}), 'content-type': 'application/json' },
-					body: JSON.stringify({ model: this.settings.get(k + 'model'), voice: this.settings.get(k + 'voice'), input: chunk, response_format: 'mp3', speed: { slow: 0.88, normal: 1, fast: 1.15 }[this.settings.get('tts_rate')] || 1 }),
-					// A local model on a small machine can take minutes for a long chapter.
-					signal: AbortSignal.timeout(engine === 'local' ? 15 * 60 * 1000 : 5 * 60 * 1000),
-				});
-			} catch (err) {
-				throw new TtsError(`Could not reach the ${what} at ${base}: ${err.cause?.code || err.message}`);
-			}
-			if (!res.ok) {
-				const detail = await res.text().catch(() => '');
-				throw new TtsError(`The ${what} answered ${res.status}: ${detail.slice(0, 300)}`);
-			}
-			buffers.push(Buffer.from(await res.arrayBuffer()));
+		let res;
+		try {
+			res = await this.fetch(`${base}/audio/speech`, {
+				method: 'POST',
+				headers: { ...(key ? { authorization: `Bearer ${key}` } : {}), 'content-type': 'application/json' },
+				body: JSON.stringify({ model: this.settings.get(k + 'model'), voice: this.settings.get(k + 'voice'), input, response_format: format, speed: { slow: 0.88, normal: 1, fast: 1.15 }[this.settings.get('tts_rate')] || 1 }),
+				// A local model on a small machine can take minutes for a long text.
+				signal: AbortSignal.timeout(engine === 'local' ? 15 * 60 * 1000 : 5 * 60 * 1000),
+			});
+		} catch (err) {
+			throw new TtsError(`Could not reach the ${what} at ${base}: ${err.cause?.code || err.message}`);
 		}
+		if (!res.ok) {
+			const detail = await res.text().catch(() => '');
+			throw new TtsError(`The ${what} answered ${res.status}: ${detail.slice(0, 300)}`);
+		}
+		return Buffer.from(await res.arrayBuffer());
+	}
+
+	async speechApi(engine, text, outFile) {
+		const buffers = [];
+		for (const chunk of chunkText(text, 3800)) buffers.push(await this.speechApiRequest(engine, chunk, 'mp3'));
 		// MP3 is a stream of independent frames, so parts can simply follow each other.
 		await writeFile(outFile, Buffer.concat(buffers));
 	}

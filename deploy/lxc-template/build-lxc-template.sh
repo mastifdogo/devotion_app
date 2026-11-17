@@ -148,6 +148,10 @@ done
 in_root /opt/$APP/current/node/bin/node -e 'require("node:sqlite"); console.log("node", process.version, "with sqlite")'
 in_root runuser -u $APP -- sh -c 'cd /tmp && echo "This is the voice that will read your devotions." | /opt/piper/piper --model /usr/local/share/$APP/voices/en_US-lessac-medium.onnx --output_file t.wav >/dev/null 2>&1 && lame --quiet -m m -V 6 t.wav t.mp3 && [ "\$(wc -c <t.mp3)" -gt 5000 ] && rm t.wav t.mp3' \
 	|| { echo "the voice engine does not produce audio in the image" >&2; exit 1; }
+# The Bible is read a verse per line, and the server times each verse from
+# the file the voice engine writes for it: one file per line, in order.
+in_root runuser -u $APP -- sh -c 'cd /tmp && rm -rf pv && mkdir pv && printf "Verse one.\\nVerse two is a little longer.\\nVerse three.\\n" | /opt/piper/piper --model /usr/local/share/$APP/voices/en_US-lessac-medium.onnx --output_dir pv >/dev/null 2>&1 && [ "\$(ls pv/*.wav | wc -l)" -eq 3 ] && rm -rf pv' \
+	|| { echo "the voice engine does not write one file per line in the image" >&2; exit 1; }
 in_root runuser -u $APP -- smbclient --version
 echo "voice engine check: ok"
 # The server must not have left a database behind while being checked.

@@ -259,6 +259,24 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		});
 	};
 
+	// An MP3, whole or the part a player asks for when it jumps ahead ("Range: bytes=1000-").
+	const sendAudio = (req, res, file, size, etag) => {
+		const headers = { 'content-type': 'audio/mpeg', 'accept-ranges': 'bytes', etag: `"${etag}"`, 'cache-control': 'private, max-age=31536000, immutable' };
+		const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+		if (range && (range[1] || range[2])) {
+			let start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+			const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+			if (start >= size || start > end) {
+				res.writeHead(416, { 'content-range': `bytes */${size}` });
+				return res.end();
+			}
+			res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': end - start + 1 });
+			return createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+		}
+		res.writeHead(200, { ...headers, 'content-length': size });
+		createReadStream(file).on('error', () => res.destroy()).pipe(res);
+	};
+
 	const routes = [];
 	const route = (method, pattern, handler) => routes.push({ method, pattern, handler });
 
@@ -300,8 +318,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		const file = path.join(audioDir, path.basename(row.file));
 		const info = await stat(file).catch(() => null);
 		if (!info) throw new HttpError(404, 'The audio file is missing on the server.');
-		res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': info.size, etag: `"${row.audio_sha256}"`, 'cache-control': 'private, max-age=31536000, immutable' });
-		createReadStream(file).on('error', () => res.destroy()).pipe(res);
+		sendAudio(req, res, file, info.size, row.sha256);
 	});
 
 	// Profiles: who is reading. There is no login on the app's side; a profile
@@ -392,12 +409,20 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	// A chapter read aloud (book from 0, chapter from 1): the MP3 once it exists; until then
 	// 202 while it is being made, which the first request starts.
+	// When each verse is heard in that MP3 (seconds): { duration, exact, verses: [{ verse, start, end }] }.
+	// Also answers 202 while the chapter is being made, and starts it.
+	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})\/verses$/, async (req, res, m) => {
+		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
+		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]));
+		if (got.state !== 'ready') return send(res, 202, { status: 'making' }, { 'retry-after': '3' });
+		send(res, 200, got.info);
+	});
+
 	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})$/, async (req, res, m) => {
 		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
 		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]));
 		if (got.state !== 'ready') return send(res, 202, { status: 'making' }, { 'retry-after': '3' });
-		res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': got.bytes, etag: `"${got.etag}"`, 'cache-control': 'private, max-age=31536000, immutable' });
-		createReadStream(got.file).on('error', () => res.destroy()).pipe(res);
+		sendAudio(req, res, got.file, got.bytes, got.etag);
 	});
 
 	route('GET', /^\/api\/bibles\/([a-z0-9]+)$/, async (req, res, m) => {

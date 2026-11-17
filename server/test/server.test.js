@@ -11,13 +11,13 @@ import { openDb } from '../src/db.js';
 import { Settings } from '../src/settings.js';
 import { Gmail } from '../src/gmail.js';
 import { Extractor } from '../src/extract.js';
-import { Tts } from '../src/tts.js';
+import { Tts, wavFile } from '../src/tts.js';
 import { Pipeline } from '../src/pipeline.js';
 import { Updater } from '../src/update.js';
 import { createServer } from '../src/server.js';
 import { Voices } from '../src/voices.js';
 import { Bibles } from '../src/bibles.js';
-import { BibleAudio, chapterText } from '../src/bibleaudio.js';
+import { BibleAudio, chapterParts } from '../src/bibleaudio.js';
 import { Archiver } from '../src/archive.js';
 import { Wallpapers } from '../src/wallpapers.js';
 import { plan } from '../src/resources.js';
@@ -60,6 +60,14 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const extractor = new Extractor({ settings, clientFactory: () => fakeClient });
 	const runImpl = async (cmd, args, opts) => {
 		calls.run.push({ cmd, args, input: opts?.input });
+		// piper with --output_dir writes one wav per line (unless this "piper" is too old for it).
+		if (cmd === 'piper' && args.includes('--output_dir')) {
+			if (calls.oldPiper) return;
+			const out = args[args.indexOf('--output_dir') + 1];
+			// A quarter of a second of sound for each word, at 8000 samples a second.
+			opts.input.trim().split('\n').forEach((line, i) => writeFileSync(path.join(out, `${1700000000000000000n + BigInt(i)}.wav`), wavFile({ rate: 8000, channels: 1 }, [Buffer.alloc(line.split(' ').length * 4000, 1)])));
+			return;
+		}
 		// piper writes the wav named after --output_file; lame writes its last argument.
 		writeFileSync(cmd === 'lame' ? args.at(-1) : args[args.indexOf('--output_file') + 1], Buffer.alloc(2048, cmd === 'lame' ? 7 : 1));
 	};
@@ -85,6 +93,8 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const speechFetch = async (url, init) => {
 		calls.speech.push({ url: String(url), auth: init.headers.authorization, body: JSON.parse(init.body) });
 		if (calls.failSpeech) return new Response(calls.failSpeech, { status: 500 });
+		// One second of sound per request, when this stand-in is told to honour the WAV format.
+		if (calls.speechWav && JSON.parse(init.body).response_format === 'wav') return new Response(wavFile({ rate: 8000, channels: 1 }, [Buffer.alloc(16000, 2)]), { status: 200 });
 		return new Response(Buffer.alloc(4096, 9), { status: 200 });
 	};
 	const tts = new Tts({ settings, audioDir, voices, runImpl, fetchImpl: speechFetch, planImpl: (provider) => plan({ cores: 1, memoryMb: 1024, usableMb: 819 }, provider) });
@@ -134,8 +144,8 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	t.after(() => { server.close(); server.closeAllConnections(); db.close(); rmSync(dir, { recursive: true, force: true }); });
 
 	let cookie = '';
-	const call = async (p, { body, method } = {}) => {
-		const headers = {};
+	const call = async (p, { body, method, headers: extra } = {}) => {
+		const headers = { ...extra };
 		if (cookie) headers.cookie = cookie;
 		if (body !== undefined) headers['content-type'] = 'application/json';
 		const res = await fetch(base + p, { method: method || (body !== undefined ? 'POST' : 'GET'), headers, body: body !== undefined ? JSON.stringify(body) : undefined, redirect: 'manual' });
@@ -700,9 +710,9 @@ test('bible versions: checked, converted, listed and served to the app', async (
 
 	// Listening: off until an engine is chosen for the Bible; then a chapter is made when first asked for, and kept.
 	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 404);
-	assert.equal(chapterText('John', 3, ['a', '', 'c']), 'John, chapter 3.\n\na\nc');
-	assert.equal(chapterText('Psalms', 23, ['x']), 'Psalm 23.\n\nx');
-	assert.equal(chapterText('Jude', 1, ['x']), 'Jude.\n\nx');
+	assert.deepEqual(chapterParts('John', 1, ['a', '', 'c']), [{ verse: 1, text: 'John, chapter 1, verse 1. a' }, { verse: 3, text: 'Verse 3. c' }]);
+	assert.deepEqual(chapterParts('John', 3, ['', 'b']), [{ verse: 2, text: 'Chapter 3, verse 2. b' }]);
+	assert.deepEqual(chapterParts('Psalms', 23, ['x']).concat(chapterParts('Psalms', 1, ['x']), chapterParts('Jude', 1, ['x'])).map((p) => p.text), ['Psalm 23, verse 1. x', 'Psalms, Psalm 1, verse 1. x', 'Jude, verse 1. x']);
 	await call('/admin/api/settings', { body: { piper_model: '/voice.onnx', bible_engine: 'piper' } });
 	assert.equal((await (await call('/api/bibles')).json()).audio, true);
 	assert.equal((await call('/api/bibles/tst/audio/0/9')).status, 404);
@@ -711,12 +721,28 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 202);
 	let heard = await listen('/api/bibles/tst/audio/0/1');
 	assert.deepEqual([heard.status, heard.headers.get('content-type'), heard.headers.get('content-length')], [200, 'audio/mpeg', '2048']);
-	assert.equal(calls.run.filter((c) => c.cmd === 'piper').at(-1).input, 'I Book, chapter 1.\nIn the beginning\nthird\n');
+	// One line per verse, each announced; the times come from the sound piper made for each line.
+	assert.equal(calls.run.filter((c) => c.cmd === 'piper').at(-1).input, 'I Book, chapter 1, verse 1. In the beginning\nVerse 3. third\n');
+	assert.equal((await call('/api/bibles/tst/audio/0/9/verses')).status, 404);
+	assert.deepEqual(await (await call('/api/bibles/tst/audio/0/1/verses')).json(), { duration: 3.25, exact: true, verses: [{ verse: 1, start: 0, end: 2.25 }, { verse: 3, start: 2.5, end: 3.25 }] });
+	// A player jumping to a verse asks for part of the file.
+	const part = await call('/api/bibles/tst/audio/0/1', { headers: { range: 'bytes=1000-1999' } });
+	assert.deepEqual([part.status, part.headers.get('content-range'), (await part.arrayBuffer()).byteLength], [206, 'bytes 1000-1999/2048', 1000]);
+	assert.equal((await call('/api/bibles/tst/audio/0/1', { headers: { range: 'bytes=5000-' } })).status, 416);
 	const runs = calls.run.length;
 	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 200); // kept: not made again
 	assert.equal(calls.run.length, runs);
 	state = await (await call('/admin/api/state')).json();
 	assert.deepEqual([state.bible_audio, state.engines.bible_engine], [{ files: 1, bytes: 2048 }, 'piper']);
+	// A piper too old to write a file per line: read as one text, times estimated.
+	calls.oldPiper = true;
+	await call('/admin/api/settings', { body: { tts_rate: 'slow' } });
+	heard = await listen('/api/bibles/tst/audio/0/1');
+	assert.equal(heard.status, 200);
+	assert.equal(calls.run.filter((c) => c.cmd === 'piper').at(-1).input, 'I Book, chapter 1, verse 1. In the beginning\nVerse 3. third\n');
+	assert.equal((await (await call('/api/bibles/tst/audio/0/1/verses')).json()).exact, false);
+	calls.oldPiper = false;
+	await call('/admin/api/settings', { body: { tts_rate: 'normal' } });
 	// A local speech server (OpenAI's API on the owner's network, no key): its own voice, its own files.
 	await call('/admin/api/settings', { body: { bible_engine: 'local' } });
 	assert.equal((await (await call('/api/bibles')).json()).audio, true); // falls back to piper until an address is set
@@ -725,7 +751,20 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	await call('/admin/api/settings', { body: { tts_local_base_url: 'http://192.168.1.50:8880/v1/' } });
 	heard = await listen('/api/bibles/tst/audio/0/2');
 	assert.deepEqual([heard.status, heard.headers.get('content-length')], [200, '4096']);
-	assert.deepEqual([calls.speech.at(-1).url, calls.speech.at(-1).auth, calls.speech.at(-1).body.voice, calls.speech.at(-1).body.model, calls.speech.at(-1).body.input], ['http://192.168.1.50:8880/v1/audio/speech', undefined, 'Bella', 'kokoro', 'I Book, chapter 2.\n\nc2v1']);
+	// This stand-in answers MP3 whatever is asked, as some servers do: the chapter is then read as one text, with estimated times.
+	assert.deepEqual(calls.speech.slice(-2).map((c) => [c.url, c.auth, c.body.voice, c.body.model, c.body.response_format, c.body.input]), [
+		['http://192.168.1.50:8880/v1/audio/speech', undefined, 'Bella', 'kokoro', 'wav', 'Chapter 2, verse 1. c2v1'],
+		['http://192.168.1.50:8880/v1/audio/speech', undefined, 'Bella', 'kokoro', 'mp3', 'Chapter 2, verse 1. c2v1']]);
+	assert.deepEqual(await (await call('/api/bibles/tst/audio/0/2/verses')).json(), { duration: 0, exact: false, verses: [{ verse: 1, start: 0, end: 0 }] });
+	// A speech server that does answer WAV: one request per verse, exact times, joined and encoded here.
+	calls.speechWav = true;
+	await call('/admin/api/settings', { body: { tts_local_voice: 'Nicole' } });
+	heard = await listen('/api/bibles/tst/audio/0/1');
+	assert.deepEqual([heard.status, heard.headers.get('content-length')], [200, '2048']);
+	assert.deepEqual(calls.speech.slice(-2).map((c) => [c.body.response_format, c.body.input]), [['wav', 'I Book, chapter 1, verse 1. In the beginning'], ['wav', 'Verse 3. third']]);
+	assert.deepEqual(await (await call('/api/bibles/tst/audio/0/1/verses')).json(), { duration: 2.25, exact: true, verses: [{ verse: 1, start: 0, end: 1 }, { verse: 3, start: 1.25, end: 2.25 }] });
+	calls.speechWav = false;
+	await call('/admin/api/settings', { body: { tts_local_voice: 'Bella' } });
 	// A failure is reported once, and asking again tries again.
 	calls.failSpeech = 'model not loaded';
 	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 202);
