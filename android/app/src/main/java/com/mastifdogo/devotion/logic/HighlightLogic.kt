@@ -106,6 +106,13 @@ object HighlightLogic {
         return newestCovering(live, offset, offset + 1) { true }
     }
 
+    /**
+     * Index of the verse number tapped at body offset [offset], or -1: a number's range plus the
+     * [slack] characters after it (the space before the verse text), for a comfortable target.
+     */
+    fun numberAt(numbers: List<Passage>, offset: Int, slack: Int = 1): Int =
+        numbers.indexOfFirst { offset >= it.start && offset < it.end + slack.coerceAtLeast(0) }
+
     /** Index of the link containing body offset [offset], or -1. */
     fun linkAt(links: List<Passage?>, offset: Int): Int =
         links.indexOfFirst { it != null && offset >= it.start && offset < it.end }

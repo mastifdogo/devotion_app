@@ -660,7 +660,7 @@ private fun PlayerBar(
 
 /** The Follow / Auto scroll toggle, drawn as an item box like the speed indicator; outlined in primary when on. */
 @Composable
-private fun ScrollToggle(vm: MainViewModel, label: String, selected: Boolean, onClick: () -> Unit) {
+fun ScrollToggle(vm: MainViewModel, label: String, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(8.dp)
     Box(
         // A 48dp-high touch target around the smaller box.

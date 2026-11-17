@@ -58,6 +58,11 @@ fun EntryBodyText(
     /** A range (body offsets) marked with a tinted background, e.g. the referenced verses. */
     marked: Passage? = null,
     markColor: Color = Color.Unspecified,
+    /** A second tinted range (body offsets), e.g. the verse being read aloud. */
+    reading: Passage? = null,
+    readingColor: Color = Color.Unspecified,
+    /** When set, a tap on verse number i (or the space after it) calls this instead of anything else. */
+    onTapNumber: ((Int) -> Unit)? = null,
     /**
      * When [scrollKey] changes and [scrollToOffset] is set, [onScrollTarget] receives the y (in
      * pixels, from the top of this text) of the line holding that body offset, once laid out.
@@ -80,8 +85,13 @@ fun EntryBodyText(
     val markers = remember(body, annotations) { HighlightLogic.commentMarkers(annotations, body.length) }
     val numberColor = colors.primary.toArgb()
     val markArgb = if (markColor == Color.Unspecified) 0 else markColor.toArgb()
-    val content = remember(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor) {
-        buildBodyText(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor)
+    val readingArgb = if (readingColor == Color.Unspecified) 0 else readingColor.toArgb()
+    val content = remember(
+        body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor, reading, readingArgb,
+    ) {
+        buildBodyText(
+            body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor, reading, readingArgb,
+        )
     }
     val callbacks = remember { BodyCallbacks() }
 
@@ -97,6 +107,8 @@ fun EntryBodyText(
             callbacks.onComment = onComment
             callbacks.onOpenAnnotation = onOpenAnnotation
             callbacks.onOpenLink = onOpenLink
+            callbacks.verseNumbers = verseNumbers
+            callbacks.onTapNumber = onTapNumber
             locator?.resolve = { bodyOffset ->
                 val layout = view.layout
                 if (layout == null) {
@@ -155,6 +167,8 @@ private class BodyCallbacks {
     var onComment: (Int, Int) -> Unit = { _, _ -> }
     var onOpenAnnotation: (Annotation) -> Unit = {}
     var onOpenLink: (Int) -> Unit = {}
+    var verseNumbers: List<Passage> = emptyList()
+    var onTapNumber: ((Int) -> Unit)? = null
     var lastScrollKey: Any? = null
 
     /** The current selection as a body range, or null when nothing (or only a marker) is selected. */
@@ -175,6 +189,15 @@ private class BodyCallbacks {
             return
         }
         val offset = HighlightLogic.toBody(markers, displayOffset)
+        // A verse number (only when the caller wants those taps): never the verse text itself.
+        val tapNumber = onTapNumber
+        if (tapNumber != null) {
+            val number = HighlightLogic.numberAt(verseNumbers, offset)
+            if (number >= 0) {
+                tapNumber(number)
+                return
+            }
+        }
         val link = HighlightLogic.linkAt(links, offset)
         if (link >= 0) {
             onOpenLink(link)
@@ -271,6 +294,8 @@ private fun buildBodyText(
     marked: Passage?,
     markArgb: Int,
     numberColor: Int,
+    reading: Passage?,
+    readingArgb: Int,
 ): CharSequence {
     val text = SpannableString(HighlightLogic.displayText(body, markers))
     // The marked range first, so highlights are drawn over it.
@@ -278,6 +303,12 @@ private fun buildBodyText(
         val start = HighlightLogic.toDisplayStart(markers, marked.start)
         val end = HighlightLogic.toDisplayEnd(markers, marked.end)
         if (start < end) text.setSpan(BackgroundColorSpan(markArgb), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+    // The verse being read: over the referenced-verse tint, under the user's highlights.
+    if (reading != null && readingArgb != 0) {
+        val start = HighlightLogic.toDisplayStart(markers, reading.start)
+        val end = HighlightLogic.toDisplayEnd(markers, reading.end)
+        if (start < end) text.setSpan(BackgroundColorSpan(readingArgb), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
     for (number in verseNumbers) {
         val start = HighlightLogic.toDisplayStart(markers, number.start)

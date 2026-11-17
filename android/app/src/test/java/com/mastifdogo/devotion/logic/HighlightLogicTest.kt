@@ -127,6 +127,20 @@ class HighlightLogicTest {
         assertEquals(-1, HighlightLogic.linkAt(links, 6))
     }
 
+    @Test
+    fun numberAt_includesTheSpaceAfterTheNumber() {
+        // "1 In…\n12 And…": numbers at [0,1) and [20,22).
+        val numbers = listOf(Passage(0, 1), Passage(20, 22))
+        assertEquals(0, HighlightLogic.numberAt(numbers, 0))
+        assertEquals(0, HighlightLogic.numberAt(numbers, 1)) // the space after "1"
+        assertEquals(-1, HighlightLogic.numberAt(numbers, 2)) // verse text
+        assertEquals(1, HighlightLogic.numberAt(numbers, 21))
+        assertEquals(1, HighlightLogic.numberAt(numbers, 22))
+        assertEquals(-1, HighlightLogic.numberAt(numbers, 23))
+        assertEquals(-1, HighlightLogic.numberAt(numbers, 1, slack = 0))
+        assertEquals(-1, HighlightLogic.numberAt(emptyList(), 0))
+    }
+
     // ---- markers and offset mapping ---------------------------------------------------------
 
     @Test
