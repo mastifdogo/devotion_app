@@ -4,6 +4,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,11 +42,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -58,12 +64,15 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.data.Annotation
 import com.mastifdogo.devotion.logic.BibleAudioLogic
 import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleTextLogic
+import com.mastifdogo.devotion.logic.FollowLogic
 import com.mastifdogo.devotion.logic.Passage
 import com.mastifdogo.devotion.logic.TextLogic
 import kotlinx.coroutines.flow.first
@@ -351,17 +360,34 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
 
     BibleHeader(vm, title, showVersions = true, onTitleClick = { vm.showBibleBooks() })
 
+    val audioTitle = BibleAudioLogic.chapterTitle(book?.name ?: "", vm.bibleChapter + 1)
+    val versionName = bible.name.ifBlank { bible.id }
+    // Keeping the verse being read in view: on for each chapter until a drag lets go of it;
+    // the Follow button in the audio bar takes hold again.
+    var followVerse by remember(bible.id, vm.bibleBook, vm.bibleChapter) { mutableStateOf(true) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // A fresh scroll position (top) for every chapter.
         key(bible.id, vm.bibleBook, vm.bibleChapter) {
-            ChapterText(vm, bible, verses, Modifier.weight(1f))
+            ChapterText(
+                vm = vm,
+                bible = bible,
+                verses = verses,
+                modifier = Modifier.weight(1f),
+                audioTitle = audioTitle,
+                versionName = versionName,
+                followVerse = followVerse,
+                onLetGo = { followVerse = false },
+            )
         }
         if (book != null && verses.isNotEmpty()) {
             ChapterAudioBar(
                 vm = vm,
                 ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1),
-                title = BibleAudioLogic.chapterTitle(book.name, vm.bibleChapter + 1),
-                versionName = bible.name.ifBlank { bible.id },
+                title = audioTitle,
+                versionName = versionName,
+                followVerse = followVerse,
+                onToggleFollow = { followVerse = !followVerse },
             )
         }
         val hasWallpaper = vm.appWallpaper != null
@@ -394,7 +420,14 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
  * Like the entry's bar, the speed, slider and −15/+15 show only while it is playing.
  */
 @Composable
-private fun ChapterAudioBar(vm: MainViewModel, ref: BibleRef, title: String, versionName: String) {
+private fun ChapterAudioBar(
+    vm: MainViewModel,
+    ref: BibleRef,
+    title: String,
+    versionName: String,
+    followVerse: Boolean,
+    onToggleFollow: () -> Unit,
+) {
     val loadedHere = vm.playerBibleRef == ref
     if (!vm.bibleAudioAvailable && !vm.isChapterAudioCached(ref) && !loadedHere) return
     val playingHere = loadedHere && vm.isPlaying
@@ -436,6 +469,10 @@ private fun ChapterAudioBar(vm: MainViewModel, ref: BibleRef, title: String, ver
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    // Keep the verse being read in view (only when the chapter has verse times).
+                    if (vm.chapterTimings != null) {
+                        ScrollToggle(vm, "Follow", selected = followVerse, onClick = onToggleFollow)
+                    }
                     SpeedControl(vm)
                 }
                 PlaybackControls(vm = vm, key = ref, loaded = true, playLabel = "Play", onPlayPause = play)
@@ -479,7 +516,16 @@ private fun ChapterAudioBar(vm: MainViewModel, ref: BibleRef, title: String, ver
  * marked, and a note on the whole chapter below. Annotations are per version.
  */
 @Composable
-private fun ChapterText(vm: MainViewModel, bible: Bible, verses: List<String>, modifier: Modifier) {
+private fun ChapterText(
+    vm: MainViewModel,
+    bible: Bible,
+    verses: List<String>,
+    modifier: Modifier,
+    audioTitle: String,
+    versionName: String,
+    followVerse: Boolean,
+    onLetGo: () -> Unit,
+) {
     val ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1)
     val layout = remember(verses) { BibleTextLogic.layout(verses) }
     val numbers = remember(layout) { BibleTextLogic.numberRanges(layout) }
@@ -498,12 +544,73 @@ private fun ChapterText(vm: MainViewModel, bible: Bible, verses: List<String>, m
     val dark = isAppInDarkTheme()
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
-    val topPadding = with(LocalDensity.current) { 12.dp.roundToPx() }
+    val density = LocalDensity.current
+    val topPadding = with(density) { 12.dp.roundToPx() }
     var editing by remember { mutableStateOf<BibleEdit?>(null) }
+
+    // ---- the verse being read aloud ----------------------------------------------------------
+    val loadedHere = vm.playerBibleRef == ref
+    val playingHere = loadedHere && vm.isPlaying
+    // Changes only when another verse starts, not on every position tick. Used for scrolling
+    // only: the verse being read is deliberately not highlighted.
+    val readingVerse by remember(ref) { derivedStateOf { if (vm.playerBibleRef == ref) vm.readingVerse else null } }
+    val canListen = vm.bibleAudioAvailable || vm.isChapterAudioCached(ref) || loadedHere
+    val locator = remember { BodyLocator() }
+    val viewportHeight = remember { IntArray(1) }
+    val minGlide = with(density) { 6.dp.toPx() }
+
+    // A drag by hand lets go of the verse being read (our own scrolling emits no interaction).
+    val letGo by rememberUpdatedState(onLetGo)
+    LaunchedEffect(scroll) {
+        scroll.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) letGo()
+        }
+    }
+    // Glide, frame by frame, so the verse being read sits around the middle of the screen.
+    LaunchedEffect(followVerse, playingHere, ref) {
+        if (!followVerse || !playingHere) return@LaunchedEffect
+        var previousFrame = 0L
+        var carry = 0f
+        var target = -1
+        var targetVerse = -1
+        var targetAt = 0L
+        while (true) {
+            val now = withFrameNanos { it }
+            val seconds = FollowLogic.frameSeconds(previousFrame, now)
+            previousFrame = now
+            val verse = readingVerse
+            if (verse != null && (verse != targetVerse || now - targetAt > 300_000_000L)) {
+                targetAt = now
+                val start = BibleTextLogic.verseStart(layout, verse)
+                val lineY = start?.let { locator.lineCenterY(it) }
+                val maxScroll = scroll.maxValue
+                if (lineY != null && maxScroll != Int.MAX_VALUE) {
+                    target = FollowLogic.targetScroll(topPadding + lineY, viewportHeight[0], maxScroll)
+                    targetVerse = verse
+                }
+            }
+            if (target >= 0) {
+                val remaining = target - (scroll.value + carry)
+                val step = FollowLogic.step(carry, FollowLogic.followDelta(remaining, seconds, minGlide))
+                carry = step.carry
+                if (step.pixels != 0) scroll.dispatchRawDelta(step.pixels.toFloat())
+            }
+        }
+    }
+    // Keep the screen on only while it is playing and following along.
+    val keepScreenOn = followVerse && playingHere && vm.chapterTimings != null
+    val view = LocalView.current
+    DisposableEffect(keepScreenOn) {
+        if (keepScreenOn) view.keepScreenOn = true
+        onDispose {
+            if (keepScreenOn) view.keepScreenOn = false
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .onGloballyPositioned { viewportHeight[0] = it.size.height }
             .verticalScroll(scroll)
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
@@ -543,6 +650,15 @@ private fun ChapterText(vm: MainViewModel, bible: Bible, verses: List<String>, m
                 verseNumbers = numbers,
                 marked = marked,
                 markColor = MaterialTheme.colorScheme.secondaryContainer,
+                // The verse being read is not highlighted; it is only kept in view (see the glide above).
+                locator = locator,
+                // A tap on a verse number starts reading from that verse (the text itself still
+                // opens highlights and can be selected).
+                onTapNumber = if (canListen) {
+                    { index -> vm.playChapter(ref, audioTitle, versionName, fromVerse = index + 1) }
+                } else {
+                    null
+                },
                 scrollToOffset = scrollTarget,
                 scrollKey = scrollTarget?.let { Triple(ref, markFrom, markTo) },
                 onScrollTarget = { y ->

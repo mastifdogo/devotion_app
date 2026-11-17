@@ -58,9 +58,6 @@ fun EntryBodyText(
     /** A range (body offsets) marked with a tinted background, e.g. the referenced verses. */
     marked: Passage? = null,
     markColor: Color = Color.Unspecified,
-    /** A second tinted range (body offsets), e.g. the verse being read aloud. */
-    reading: Passage? = null,
-    readingColor: Color = Color.Unspecified,
     /** When set, a tap on verse number i (or the space after it) calls this instead of anything else. */
     onTapNumber: ((Int) -> Unit)? = null,
     /**
@@ -85,13 +82,8 @@ fun EntryBodyText(
     val markers = remember(body, annotations) { HighlightLogic.commentMarkers(annotations, body.length) }
     val numberColor = colors.primary.toArgb()
     val markArgb = if (markColor == Color.Unspecified) 0 else markColor.toArgb()
-    val readingArgb = if (readingColor == Color.Unspecified) 0 else readingColor.toArgb()
-    val content = remember(
-        body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor, reading, readingArgb,
-    ) {
-        buildBodyText(
-            body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor, reading, readingArgb,
-        )
+    val content = remember(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor) {
+        buildBodyText(body, annotations, links, markers, dark, linkColor, verseNumbers, marked, markArgb, numberColor)
     }
     val callbacks = remember { BodyCallbacks() }
 
@@ -294,8 +286,6 @@ private fun buildBodyText(
     marked: Passage?,
     markArgb: Int,
     numberColor: Int,
-    reading: Passage?,
-    readingArgb: Int,
 ): CharSequence {
     val text = SpannableString(HighlightLogic.displayText(body, markers))
     // The marked range first, so highlights are drawn over it.
@@ -303,12 +293,6 @@ private fun buildBodyText(
         val start = HighlightLogic.toDisplayStart(markers, marked.start)
         val end = HighlightLogic.toDisplayEnd(markers, marked.end)
         if (start < end) text.setSpan(BackgroundColorSpan(markArgb), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-    }
-    // The verse being read: over the referenced-verse tint, under the user's highlights.
-    if (reading != null && readingArgb != 0) {
-        val start = HighlightLogic.toDisplayStart(markers, reading.start)
-        val end = HighlightLogic.toDisplayEnd(markers, reading.end)
-        if (start < end) text.setSpan(BackgroundColorSpan(readingArgb), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
     for (number in verseNumbers) {
         val start = HighlightLogic.toDisplayStart(markers, number.start)
