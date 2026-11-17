@@ -48,6 +48,7 @@ import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.AutoSync
 import com.mastifdogo.devotion.logic.BibleAudioLogic
 import com.mastifdogo.devotion.logic.BibleRef
+import com.mastifdogo.devotion.logic.ChapterTimings
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
 import com.mastifdogo.devotion.logic.EntryTab
@@ -1157,6 +1158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val metadata = c.mediaMetadata
             playerBibleTitle = metadata.title?.toString().orEmpty()
             playerBibleSubtitle = metadata.artist?.toString().orEmpty()
+            loadChapterTimings(chapter)
         } else {
             val playing = MiniPlayerLogic.parseMediaId(mediaId) ?: return
             playerBibleRef = null
@@ -1259,6 +1261,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             play,
         )
         playerBibleRef = null
+        chapterTimings = null
         playerEntryId = id
         playerVoice = voice
         positionMs = startMs
@@ -1293,6 +1296,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopPlayback() {
         pendingPlay = null
         playerBibleRef = null
+        chapterTimings = null
         afterConnect = null
         controller?.let {
             it.stop()
@@ -1405,9 +1409,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Listen / play / pause for a chapter. A chapter that is not on the phone yet is asked for
      * from the server (which may still have to make it), downloaded, then played.
      */
-    fun playChapter(ref: BibleRef, title: String, versionName: String) {
+    fun playChapter(ref: BibleRef, title: String, versionName: String, fromVerse: Int? = null) {
         if (controller != null && playerBibleRef == ref) {
-            togglePlayback()
+            if (fromVerse != null) seekToVerse(fromVerse) else togglePlayback()
             return
         }
         if (preparingChapter == ref) return
@@ -1423,7 +1427,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bibleAudioStore.fetch(api, url, ref)
                 }
                 preparingChapter = null
-                startChapterPlayback(ref, title, versionName)
+                // Where the tapped verse starts, if the chapter has verse times.
+                val timings = withContext(Dispatchers.IO) { bibleAudioStore.loadTimings(ref) }
+                val startMs = fromVerse?.let { BibleAudioLogic.seekTarget(timings, it) } ?: 0L
+                startChapterPlayback(ref, title, versionName, timings, startMs)
             } catch (e: CancellationException) {
                 if (preparingChapter == ref) preparingChapter = null
                 throw e
@@ -1441,7 +1448,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         preparingChapter = null
     }
 
-    private fun startChapterPlayback(ref: BibleRef, title: String, versionName: String) {
+    /** The verse times of the chapter loaded in the player; null when it has none. */
+    var chapterTimings: ChapterTimings? by mutableStateOf(null)
+        private set
+
+    /** The verse being read (1-based) in the loaded chapter, or null without verse times. */
+    val readingVerse: Int?
+        get() {
+            if (playerBibleRef == null) return null
+            if (!isPlaying && positionMs <= 0L) return null
+            return BibleAudioLogic.verseAt(chapterTimings, positionMs)
+        }
+
+    /** Start reading the loaded chapter from [verse] (a tap on its number): seek there and play. */
+    private fun seekToVerse(verse: Int) {
+        val c = controller ?: return
+        val target = BibleAudioLogic.seekTarget(chapterTimings, verse) ?: return
+        if (c.playbackState == Player.STATE_IDLE) c.prepare()
+        c.seekTo(target)
+        c.play()
+        refreshPosition()
+    }
+
+    /** Reads the stored verse times of [ref]; a cached MP3 without them gets one quiet attempt to fetch them. */
+    private fun loadChapterTimings(ref: BibleRef) {
+        val url = serverUrl
+        val canAsk = isServerConfigured
+        viewModelScope.launch {
+            val timings = withContext(Dispatchers.IO) {
+                bibleAudioStore.loadTimings(ref)
+                    ?: if (canAsk && bibleAudioStore.fetchTimingsQuietly(api, url, ref)) bibleAudioStore.loadTimings(ref) else null
+            }
+            if (playerBibleRef == ref) chapterTimings = timings
+        }
+    }
+
+    private fun startChapterPlayback(
+        ref: BibleRef,
+        title: String,
+        versionName: String,
+        timings: ChapterTimings?,
+        startMs: Long,
+    ) {
         val file = bibleAudioStore.file(ref)
         if (!file.isFile) {
             chapterAudioError = ref to "The audio file is missing; please try again."
@@ -1449,19 +1497,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val c = controller
         if (c == null) {
-            afterConnect = { startChapterPlayback(ref, title, versionName) }
+            afterConnect = { startChapterPlayback(ref, title, versionName, timings, startMs) }
             connectController()
             return
         }
         pendingPlay = null
-        loadIntoPlayer(c, BibleAudioLogic.mediaId(ref), file, title, versionName, 0L, true)
+        loadIntoPlayer(c, BibleAudioLogic.mediaId(ref), file, title, versionName, startMs, true)
         playerEntryId = null
         playerVoice = null
         playerBibleRef = ref
         playerBibleTitle = title
         playerBibleSubtitle = versionName
-        positionMs = 0L
+        positionMs = startMs
         durationMs = 0L
+        chapterTimings = timings
+        // An older download without verse times: try once, quietly, to get them.
+        if (timings == null) loadChapterTimings(ref)
         // Played now: least recently played chapters go first when the cache is over its limit.
         viewModelScope.launch {
             withContext(Dispatchers.IO) {

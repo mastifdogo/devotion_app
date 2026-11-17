@@ -190,6 +190,33 @@ class ApiClient {
         }
     }
 
+    /** The answer to one request for a chapter's verse times: the code, the body on 200, the error text otherwise. */
+    class ChapterVersesAnswer(val httpCode: Int, val message: String?, val body: String?)
+
+    /**
+     * One GET /api/bibles/{version}/audio/{book}/{chapter}/verses. 200 carries the verse times
+     * (and means the MP3 is ready); 202 = still being made; 404 = no Bible audio, or a server
+     * that has no verse times yet.
+     */
+    fun fetchChapterVerses(baseUrl: String, version: String, book: Int, chapter: Int): ChapterVersesAnswer {
+        val url = apiUrl(baseUrl)
+            .addPathSegments("api/bibles")
+            .addPathSegment(version)
+            .addPathSegments("audio/$book/$chapter/verses")
+            .build()
+        val request = Request.Builder().url(url).header("Accept", "application/json").build()
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (response.code == 200) return ChapterVersesAnswer(200, null, text)
+            val message = try {
+                AppJson.decodeFromString(ErrorResponse.serializer(), text).error
+            } catch (e: Exception) {
+                null
+            }
+            return ChapterVersesAnswer(response.code, message, null)
+        }
+    }
+
     /** GET /api/bibles/{id} streamed into [dest]; returns the lowercase hex SHA-256 of the bytes written. */
     fun downloadBible(baseUrl: String, id: String, dest: File, onProgress: (Long, Long) -> Unit): String {
         val url = apiUrl(baseUrl).addPathSegments("api/bibles").addPathSegment(id).build()
