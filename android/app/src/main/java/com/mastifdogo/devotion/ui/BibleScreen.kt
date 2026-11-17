@@ -1,5 +1,6 @@
 package com.mastifdogo.devotion.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -59,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.mastifdogo.devotion.data.Annotation
+import com.mastifdogo.devotion.logic.BibleAudioLogic
 import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleTextLogic
 import com.mastifdogo.devotion.logic.Passage
@@ -241,6 +244,13 @@ private fun BibleVersions(vm: MainViewModel) {
                 }
             }
         }
+        // Chapter audio kept on the phone (at most about 300 MB; least recently played goes first).
+        if (vm.bibleAudioBytes > 0L) {
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedButton(onClick = { vm.clearBibleAudio() }) {
+                Text("Clear Bible audio (${BibleAudioLogic.sizeLabel(vm.bibleAudioBytes)})")
+            }
+        }
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
@@ -346,6 +356,14 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
         key(bible.id, vm.bibleBook, vm.bibleChapter) {
             ChapterText(vm, bible, verses, Modifier.weight(1f))
         }
+        if (book != null && verses.isNotEmpty()) {
+            ChapterAudioBar(
+                vm = vm,
+                ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1),
+                title = BibleAudioLogic.chapterTitle(book.name, vm.bibleChapter + 1),
+                versionName = bible.name.ifBlank { bible.id },
+            )
+        }
         val hasWallpaper = vm.appWallpaper != null
         if (hasWallpaper) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Surface(
@@ -364,6 +382,92 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
                 TextButton(onClick = { vm.previousChapter() }, enabled = vm.hasPreviousChapter) { Text("‹ Previous") }
                 TextButton(onClick = { vm.showBibleBooks() }) { Text("Books") }
                 TextButton(onClick = { vm.nextChapter() }, enabled = vm.hasNextChapter) { Text("Next ›") }
+            }
+        }
+    }
+}
+
+/**
+ * Listen to the chapter: shown when the server can read chapters aloud (or this one is already on
+ * the phone). Listen asks the server, which may still have to make the audio ("Preparing…", with
+ * Cancel), downloads it and plays it through the same player as entries; errors offer Retry.
+ * Like the entry's bar, the speed, slider and −15/+15 show only while it is playing.
+ */
+@Composable
+private fun ChapterAudioBar(vm: MainViewModel, ref: BibleRef, title: String, versionName: String) {
+    val loadedHere = vm.playerBibleRef == ref
+    if (!vm.bibleAudioAvailable && !vm.isChapterAudioCached(ref) && !loadedHere) return
+    val playingHere = loadedHere && vm.isPlaying
+    val play = { vm.playChapter(ref, title, versionName) }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        val error = vm.chapterAudioError?.takeIf { it.first == ref }?.second
+        when {
+            vm.preparingChapter == ref -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Preparing the audio\u2026",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { vm.cancelChapterAudio() }) { Text("Cancel") }
+            }
+
+            playingHere -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = versionName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SpeedControl(vm)
+                }
+                PlaybackControls(vm = vm, key = ref, loaded = true, playLabel = "Play", onPlayPause = play)
+            }
+
+            else -> {
+                if (error != null) {
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = play) {
+                        Text(
+                            when {
+                                error != null -> "Retry"
+                                loadedHere -> "Play"
+                                else -> "Listen"
+                            },
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = versionName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

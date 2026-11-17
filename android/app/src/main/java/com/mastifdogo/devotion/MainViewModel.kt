@@ -30,6 +30,7 @@ import com.mastifdogo.devotion.data.AnnotationStore
 import com.mastifdogo.devotion.data.ApiClient
 import com.mastifdogo.devotion.data.ApiException
 import com.mastifdogo.devotion.data.Bible
+import com.mastifdogo.devotion.data.BibleAudioStore
 import com.mastifdogo.devotion.data.BibleInfo
 import com.mastifdogo.devotion.data.BibleStore
 import com.mastifdogo.devotion.data.Entry
@@ -45,6 +46,7 @@ import com.mastifdogo.devotion.data.WallpaperStore
 import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.AutoSync
+import com.mastifdogo.devotion.logic.BibleAudioLogic
 import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.BibleRefLogic
 import com.mastifdogo.devotion.logic.EntryKinds
@@ -123,6 +125,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val updater = Updater(application.cacheDir)
     private val wallpaperStore = WallpaperStore(application.filesDir)
     private val readStore = ReadStore(application.filesDir)
+    private val bibleAudioStore = BibleAudioStore(application.filesDir)
 
     // ---- navigation -------------------------------------------------------------------------
 
@@ -138,6 +141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (target is Screen.Settings) {
             refreshVoices()
             refreshSyncStatus()
+            refreshChapterAudioCache()
         }
         if (target is Screen.Wallpapers) {
             wallPreview = null
@@ -1143,9 +1147,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun adoptCurrentItem() {
         val c = controller ?: return
         if (c.mediaItemCount == 0) return
-        val playing = MiniPlayerLogic.parseMediaId(c.currentMediaItem?.mediaId) ?: return
-        playerEntryId = playing.first
-        playerVoice = playing.second
+        val mediaId = c.currentMediaItem?.mediaId
+        val chapter = BibleAudioLogic.parseMediaId(mediaId)
+        if (chapter != null) {
+            // A Bible chapter: none of the entry logic (read marks, voices, follow) applies to it.
+            playerEntryId = null
+            playerVoice = null
+            playerBibleRef = chapter
+            val metadata = c.mediaMetadata
+            playerBibleTitle = metadata.title?.toString().orEmpty()
+            playerBibleSubtitle = metadata.artist?.toString().orEmpty()
+        } else {
+            val playing = MiniPlayerLogic.parseMediaId(mediaId) ?: return
+            playerBibleRef = null
+            playerEntryId = playing.first
+            playerVoice = playing.second
+        }
         isPlaying = c.isPlaying
         refreshPosition()
     }
@@ -1232,32 +1249,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val entry = entryById(id)
         val heading = entry?.let { EntryKinds.heading(it, Locale.getDefault(), ZoneId.systemDefault()) }
-        val uri = Uri.fromFile(file)
-        val item = MediaItem.Builder()
-            .setMediaId(MiniPlayerLogic.mediaId(id, voice))
-            .setUri(uri)
-            // The URI itself does not travel to the session; the service restores it from here.
-            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
-            // Shown by the media notification and the lock screen.
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(MiniPlayerLogic.notificationTitle(heading, entry?.title))
-                    .setArtist(MiniPlayerLogic.notificationSubtitle(heading))
-                    .build(),
-            )
-            .build()
-        c.setMediaItem(item, startMs)
-        c.setPlaybackSpeed(playbackSpeed)
-        c.prepare()
-        if (play) c.play()
+        loadIntoPlayer(
+            c,
+            MiniPlayerLogic.mediaId(id, voice),
+            file,
+            MiniPlayerLogic.notificationTitle(heading, entry?.title),
+            MiniPlayerLogic.notificationSubtitle(heading),
+            startMs,
+            play,
+        )
+        playerBibleRef = null
         playerEntryId = id
         playerVoice = voice
         positionMs = startMs
         durationMs = 0L
     }
 
+    /** Loads a file into the session's player with what the notification shows, and optionally starts it. */
+    private fun loadIntoPlayer(
+        c: MediaController,
+        mediaId: String,
+        file: File,
+        title: String,
+        artist: String,
+        startMs: Long,
+        play: Boolean,
+    ) {
+        val uri = Uri.fromFile(file)
+        val item = MediaItem.Builder()
+            .setMediaId(mediaId)
+            .setUri(uri)
+            // The URI itself does not travel to the session; the service restores it from here.
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            // Shown by the media notification and the lock screen.
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).build())
+            .build()
+        c.setMediaItem(item, startMs)
+        c.setPlaybackSpeed(playbackSpeed)
+        c.prepare()
+        if (play) c.play()
+    }
+
     private fun stopPlayback() {
         pendingPlay = null
+        playerBibleRef = null
         afterConnect = null
         controller?.let {
             it.stop()
@@ -1272,7 +1307,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshPosition() {
         val c = controller ?: return
-        if (playerEntryId == null) return
+        if (playerEntryId == null && playerBibleRef == null) return
         positionMs = c.currentPosition.coerceAtLeast(0L)
         val duration = c.duration
         durationMs = if (duration == C.TIME_UNSET || duration < 0L) 0L else duration
@@ -1282,11 +1317,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Shown on every screen but the playing entry's own, while playing or paused part-way. */
     val miniPlayerVisible: Boolean
-        get() = MiniPlayerLogic.isVisible(playerEntryId, (screen as? Screen.Detail)?.id, isPlaying, positionMs)
+        get() = MiniPlayerLogic.isVisible(playerEntryId, (screen as? Screen.Detail)?.id, isPlaying, positionMs) ||
+            BibleAudioLogic.isMiniPlayerVisible(playerBibleRef, shownChapter, isPlaying, positionMs)
+
+    /** The chapter open in the Bible reader right now, or null on any other screen. */
+    val shownChapter: BibleRef?
+        get() {
+            val bible = openBible ?: return null
+            if (screen != Screen.EntryList || selectedTab != EntryTab.BIBLE) return null
+            if (bibleLoading || effectiveBibleView != BibleView.READER) return null
+            return BibleRef(bible.id, bibleBook, bibleChapter + 1)
+        }
 
     /** The two lines describing what is loaded in the player. */
     val nowPlaying: NowPlaying
         get() {
+            if (playerBibleRef != null) {
+                return NowPlaying(playerBibleTitle.ifBlank { "Bible" }, playerBibleSubtitle)
+            }
             val entry = playerEntryId?.let { entryById(it) }
             val heading = entry?.let { EntryKinds.heading(it, Locale.getDefault(), ZoneId.systemDefault()) }
             return MiniPlayerLogic.nowPlaying(heading, entry?.title)
@@ -1303,8 +1351,135 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             openPlayingWhenConnected = true
             return
         }
+        val chapter = playerBibleRef
+        if (chapter != null) {
+            // Open that chapter in the Bible tab (if its version is still on the phone).
+            if (downloadedBibles.none { it.id == chapter.bibleId }) return
+            bibleReturn = null
+            if (selectedTab != EntryTab.BIBLE) {
+                selectedTab = EntryTab.BIBLE
+                settings.entryTab = EntryTab.BIBLE.key
+            }
+            screen = Screen.EntryList
+            loadBible(chapter.bibleId) { showChapter(chapter.book, chapter.chapter - 1, null) }
+            return
+        }
         val id = playerEntryId ?: return
         if (entryById(id) != null) screen = Screen.Detail(id)
+    }
+
+    // ---- listening to Bible chapters --------------------------------------------------------
+
+    /** The server's last known "Bible audio is on" flag. */
+    var bibleAudioAvailable: Boolean by mutableStateOf(settings.bibleAudioAvailable)
+        private set
+    /** The chapter loaded in the player, if it is a Bible chapter (then [playerEntryId] is null). */
+    var playerBibleRef: BibleRef? by mutableStateOf(null)
+        private set
+    private var playerBibleTitle: String by mutableStateOf("")
+    private var playerBibleSubtitle: String by mutableStateOf("")
+    /** File names of the chapters whose audio is on the phone. */
+    var cachedChapterAudio: Set<String> by mutableStateOf(emptySet())
+        private set
+    var bibleAudioBytes: Long by mutableStateOf(0L)
+        private set
+    /** The chapter whose audio is being prepared/downloaded, if any. */
+    var preparingChapter: BibleRef? by mutableStateOf(null)
+        private set
+    /** The last failure, shown in that chapter's audio bar with Retry. */
+    var chapterAudioError: Pair<BibleRef, String>? by mutableStateOf(null)
+        private set
+    private var chapterAudioJob: Job? = null
+
+    fun isChapterAudioCached(ref: BibleRef): Boolean = BibleAudioLogic.fileName(ref) in cachedChapterAudio
+
+    private fun refreshChapterAudioCache() {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { bibleAudioStore.cachedNames() to bibleAudioStore.totalBytes() }
+            cachedChapterAudio = result.first
+            bibleAudioBytes = result.second
+        }
+    }
+
+    /**
+     * Listen / play / pause for a chapter. A chapter that is not on the phone yet is asked for
+     * from the server (which may still have to make it), downloaded, then played.
+     */
+    fun playChapter(ref: BibleRef, title: String, versionName: String) {
+        if (controller != null && playerBibleRef == ref) {
+            togglePlayback()
+            return
+        }
+        if (preparingChapter == ref) return
+        chapterAudioError = null
+        requestNotificationPermissionOnce()
+        chapterAudioJob?.cancel()
+        val url = serverUrl
+        chapterAudioJob = viewModelScope.launch {
+            try {
+                val cached = withContext(Dispatchers.IO) { bibleAudioStore.file(ref).isFile }
+                if (!cached) {
+                    preparingChapter = ref
+                    bibleAudioStore.fetch(api, url, ref)
+                }
+                preparingChapter = null
+                startChapterPlayback(ref, title, versionName)
+            } catch (e: CancellationException) {
+                if (preparingChapter == ref) preparingChapter = null
+                throw e
+            } catch (e: Exception) {
+                preparingChapter = null
+                chapterAudioError = ref to describe(e)
+            }
+        }
+    }
+
+    /** Cancel while "Preparing the audio…". */
+    fun cancelChapterAudio() {
+        chapterAudioJob?.cancel()
+        chapterAudioJob = null
+        preparingChapter = null
+    }
+
+    private fun startChapterPlayback(ref: BibleRef, title: String, versionName: String) {
+        val file = bibleAudioStore.file(ref)
+        if (!file.isFile) {
+            chapterAudioError = ref to "The audio file is missing; please try again."
+            return
+        }
+        val c = controller
+        if (c == null) {
+            afterConnect = { startChapterPlayback(ref, title, versionName) }
+            connectController()
+            return
+        }
+        pendingPlay = null
+        loadIntoPlayer(c, BibleAudioLogic.mediaId(ref), file, title, versionName, 0L, true)
+        playerEntryId = null
+        playerVoice = null
+        playerBibleRef = ref
+        playerBibleTitle = title
+        playerBibleSubtitle = versionName
+        positionMs = 0L
+        durationMs = 0L
+        // Played now: least recently played chapters go first when the cache is over its limit.
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                bibleAudioStore.touch(ref)
+                bibleAudioStore.trim(keep = ref)
+            }
+            refreshChapterAudioCache()
+        }
+    }
+
+    /** Settings: "Clear Bible audio". */
+    fun clearBibleAudio() {
+        cancelChapterAudio()
+        if (playerBibleRef != null) stopPlayback()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { bibleAudioStore.clear() }
+            refreshChapterAudioCache()
+        }
     }
 
     // ---- Bible ------------------------------------------------------------------------------
@@ -1590,8 +1765,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         serverBiblesLoading = true
         viewModelScope.launch {
             try {
-                serverBibles = withContext(Dispatchers.IO) { api.bibles(url) }
+                val response = withContext(Dispatchers.IO) { api.biblesResponse(url) }
+                serverBibles = response.bibles
                 serverBiblesLoaded = true
+                // Remembered so chapters already on the phone can be listened to offline.
+                bibleAudioAvailable = response.audio
+                settings.bibleAudioAvailable = response.audio
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -2031,6 +2210,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         connectController()
         scheduleReminder()
         if (remindersEnabled && isServerConfigured) requestNotificationPermissionOnce()
+        refreshChapterAudioCache()
         if (selectedTab == EntryTab.BIBLE) enterBibleTab()
         // Keep the background work in line with the setting (also after an app update).
         applySchedule()

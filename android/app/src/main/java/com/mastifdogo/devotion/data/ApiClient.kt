@@ -148,12 +148,46 @@ class ApiClient {
 
     // ---- bibles -----------------------------------------------------------------------------
 
-    /** GET /api/bibles. */
-    fun bibles(baseUrl: String): List<BibleInfo> {
+    /** GET /api/bibles: the versions, and whether Bible audio is switched on. */
+    fun biblesResponse(baseUrl: String): BiblesResponse {
         val url = apiUrl(baseUrl).addPathSegments("api/bibles").build()
         return getJson(url, "Loading Bible versions") {
             AppJson.decodeFromString(BiblesResponse.serializer(), it)
-        }.bibles
+        }
+    }
+
+    /** GET /api/bibles (versions only). */
+    fun bibles(baseUrl: String): List<BibleInfo> = biblesResponse(baseUrl).bibles
+
+    /** The answer to one request for a chapter's audio: the HTTP code and, for errors, the server's message. */
+    class ChapterAudioAnswer(val httpCode: Int, val message: String?)
+
+    /**
+     * One GET /api/bibles/{version}/audio/{book}/{chapter} ([book] 0-based, [chapter] 1-based).
+     * On 200 the MP3 is written to [dest]; any other code (202 = still being made, 404, 502, 503)
+     * is returned with the server's {"error": …} text, for BibleAudioLogic.nextStep to decide.
+     */
+    fun fetchChapterAudio(baseUrl: String, version: String, book: Int, chapter: Int, dest: File): ChapterAudioAnswer {
+        val url = apiUrl(baseUrl)
+            .addPathSegments("api/bibles")
+            .addPathSegment(version)
+            .addPathSegments("audio/$book/$chapter")
+            .build()
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 200) {
+                val body = response.body ?: return ChapterAudioAnswer(502, "The server sent no audio.")
+                body.byteStream().use { input -> dest.outputStream().use { output -> input.copyTo(output, 64 * 1024) } }
+                return ChapterAudioAnswer(200, null)
+            }
+            val text = response.body?.string().orEmpty()
+            val message = try {
+                AppJson.decodeFromString(ErrorResponse.serializer(), text).error
+            } catch (e: Exception) {
+                null
+            }
+            return ChapterAudioAnswer(response.code, message)
+        }
     }
 
     /** GET /api/bibles/{id} streamed into [dest]; returns the lowercase hex SHA-256 of the bytes written. */

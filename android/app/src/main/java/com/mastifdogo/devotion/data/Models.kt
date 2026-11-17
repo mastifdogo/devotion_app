@@ -212,7 +212,11 @@ data class BibleInfo(
 )
 
 @Serializable
-data class BiblesResponse(val bibles: List<BibleInfo> = emptyList())
+data class BiblesResponse(
+    val bibles: List<BibleInfo> = emptyList(),
+    /** Whether the server can read Bible chapters aloud (absent on older servers = false). */
+    val audio: Boolean = false,
+)
 
 @Serializable
 data class BibleBook(

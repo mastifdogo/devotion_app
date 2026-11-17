@@ -60,6 +60,7 @@ import com.mastifdogo.devotion.BuildConfig
 import com.mastifdogo.devotion.MainViewModel
 import com.mastifdogo.devotion.Screen
 import com.mastifdogo.devotion.logic.AutoSync
+import com.mastifdogo.devotion.logic.BibleAudioLogic
 import com.mastifdogo.devotion.logic.SyncScheduleLogic
 import com.mastifdogo.devotion.logic.WindowLogic
 import com.mastifdogo.devotion.UpdateUi
@@ -586,6 +587,11 @@ private fun CacheSection(vm: MainViewModel) {
     )
     Spacer(modifier = Modifier.height(8.dp))
     OutlinedButton(onClick = { confirmClear = true }) { Text("Clear cache") }
+    Spacer(modifier = Modifier.height(8.dp))
+    // Chapters listened to in the Bible tab (kept under about 300 MB automatically).
+    OutlinedButton(onClick = { vm.clearBibleAudio() }, enabled = vm.bibleAudioBytes > 0L) {
+        Text("Clear Bible audio (${BibleAudioLogic.sizeLabel(vm.bibleAudioBytes)})")
+    }
 
     if (confirmClear) {
         AlertDialog(

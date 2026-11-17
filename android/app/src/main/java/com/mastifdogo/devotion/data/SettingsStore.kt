@@ -208,6 +208,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getFloat(KEY_WALL_BIAS, 0.5f)
         set(value) = prefs.edit().putFloat(KEY_WALL_BIAS, value).apply()
 
+    /** The server's last known "Bible audio is on" flag (kept so cached chapters work offline). */
+    var bibleAudioAvailable: Boolean
+        get() = prefs.getBoolean(KEY_BIBLE_AUDIO, false)
+        set(value) = prefs.edit().putBoolean(KEY_BIBLE_AUDIO, value).apply()
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -257,6 +262,7 @@ class SettingsStore(context: Context) {
         const val KEY_DARK_FROM = "wallpaper_dark_from"
         const val KEY_DARK_UNTIL = "wallpaper_dark_until"
         const val KEY_WALL_BIAS = "wallpaper_bias"
+        const val KEY_BIBLE_AUDIO = "bible_audio_available"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"

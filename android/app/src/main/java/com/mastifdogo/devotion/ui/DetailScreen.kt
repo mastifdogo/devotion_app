@@ -625,7 +625,13 @@ private fun PlayerBar(
                 Spacer(modifier = Modifier.height(8.dp))
             } else if (parts.progress) {
                 val loaded = vm.playerEntryId == entry.id && vm.playerVoice == voice
-                PlayerControls(vm = vm, entry = entry, loaded = loaded, cached = vm.isAudioCached(entry))
+                PlaybackControls(
+                    vm = vm,
+                    key = entry.id,
+                    loaded = loaded,
+                    playLabel = if (vm.isAudioCached(entry)) "Play" else "Download & play",
+                    onPlayPause = { vm.playPause(entry) },
+                )
             } else {
                 // Not playing: just the play button and the voice name.
                 Row(
@@ -731,15 +737,20 @@ fun SpeedControl(vm: MainViewModel) {
     }
 }
 
+/**
+ * The seek slider, position / duration and −15 s / Play-Pause / +15 s for whatever is in the
+ * player (an entry or a Bible chapter). [loaded] says whether this screen's item is the one loaded;
+ * [key] identifies the item (resets the slider's drag state).
+ */
 @Composable
-private fun PlayerControls(vm: MainViewModel, entry: Entry, loaded: Boolean, cached: Boolean) {
+fun PlaybackControls(vm: MainViewModel, key: Any, loaded: Boolean, playLabel: String, onPlayPause: () -> Unit) {
     val duration = if (loaded) vm.durationMs else 0L
     val position = if (loaded) vm.positionMs else 0L
     val playing = loaded && vm.isPlaying
     val canSeek = loaded && duration > 0L
 
     // While the thumb is being dragged the slider follows the finger, not the player.
-    var dragValue by remember(entry.id) { mutableStateOf<Float?>(null) }
+    var dragValue by remember(key) { mutableStateOf<Float?>(null) }
     val sliderMax = if (duration > 0L) duration.toFloat() else 1f
     val sliderValue = (dragValue ?: position.toFloat()).coerceIn(0f, sliderMax)
 
@@ -771,14 +782,8 @@ private fun PlayerControls(vm: MainViewModel, entry: Entry, loaded: Boolean, cac
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = { vm.skip(-15_000L) }, enabled = canSeek) { Text("−15 s") }
-        Button(onClick = { vm.playPause(entry) }) {
-            Text(
-                when {
-                    playing -> "Pause"
-                    cached -> "Play"
-                    else -> "Download & play"
-                }
-            )
+        Button(onClick = onPlayPause) {
+            Text(if (playing) "Pause" else playLabel)
         }
         TextButton(onClick = { vm.skip(15_000L) }, enabled = canSeek) { Text("+15 s") }
     }
