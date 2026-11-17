@@ -1,5 +1,8 @@
 package com.mastifdogo.devotion.logic
 
+import com.mastifdogo.devotion.data.AppJson
+import kotlinx.serialization.Serializable
+
 /** What to do after one request for a chapter's audio. */
 sealed class AudioFetchStep {
     /** 200: the MP3 was received. */
@@ -9,6 +12,12 @@ sealed class AudioFetchStep {
     /** Anything else: stop and show [message]; the user can retry. */
     data class Failed(val message: String) : AudioFetchStep()
 }
+
+/** When one verse is heard in a chapter's audio (milliseconds into the MP3). [verse] is 1-based. */
+data class VerseTime(val verse: Int, val startMs: Long, val endMs: Long)
+
+/** The verse times of a chapter's audio; [exact] false means they are estimates. */
+data class ChapterTimings(val durationMs: Long, val exact: Boolean, val verses: List<VerseTime>)
 
 /** A cached chapter audio file: its name, size and when it was last played. */
 data class CachedChapterAudio(val name: String, val bytes: Long, val lastPlayedMillis: Long)
@@ -54,6 +63,70 @@ object BibleAudioLogic {
         }.joinToString("").trim('.').ifEmpty { "bible" }
         return "$safe-${ref.book}-${ref.chapter}.mp3"
     }
+
+    /** "kjv-42-3.json": the verse times kept next to the chapter's MP3. */
+    fun timingsFileName(ref: BibleRef): String = fileName(ref).removeSuffix(".mp3") + ".json"
+
+    /** The timings file that belongs to an MP3 file name. */
+    fun timingsFileFor(mp3Name: String): String = mp3Name.removeSuffix(".mp3") + ".json"
+
+    @Serializable
+    private data class RawVerse(val verse: Int? = null, val start: Double? = null, val end: Double? = null)
+
+    @Serializable
+    private data class RawTimings(
+        val duration: Double? = null,
+        val exact: Boolean? = null,
+        val verses: List<RawVerse>? = null,
+    )
+
+    /**
+     * Parses the answer of .../verses (times in seconds) leniently: unknown keys are ignored,
+     * verses without a number or a start are skipped, a missing end is the next verse's start (or
+     * the duration), and the result is ordered by start. Null when the JSON is malformed or has
+     * no usable verse.
+     */
+    fun parseTimings(json: String?): ChapterTimings? {
+        if (json.isNullOrBlank()) return null
+        val raw = try {
+            AppJson.decodeFromString(RawTimings.serializer(), json)
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
+        fun ms(seconds: Double): Long = (seconds * 1000.0).toLong().coerceAtLeast(0L)
+        val starts = (raw.verses ?: emptyList())
+            .mapNotNull { v ->
+                val verse = v.verse?.takeIf { it >= 1 } ?: return@mapNotNull null
+                val start = v.start?.takeIf { !it.isNaN() } ?: return@mapNotNull null
+                Triple(verse, ms(start), v.end?.takeIf { !it.isNaN() }?.let { ms(it) })
+            }
+            .sortedBy { it.second }
+        if (starts.isEmpty()) return null
+        val duration = raw.duration?.takeIf { !it.isNaN() && it > 0.0 }?.let { ms(it) } ?: 0L
+        val verses = starts.mapIndexed { i, (verse, start, end) ->
+            val fallbackEnd = starts.getOrNull(i + 1)?.second ?: maxOf(duration, start)
+            VerseTime(verse, start, (end ?: fallbackEnd).coerceAtLeast(start))
+        }
+        return ChapterTimings(duration, raw.exact ?: false, verses)
+    }
+
+    /**
+     * The verse (1-based number) being read at [positionMs]: the last one whose start is at or
+     * before the position; before the first start, the first verse. Null without timings.
+     */
+    fun verseAt(timings: ChapterTimings?, positionMs: Long): Int? {
+        val verses = timings?.verses ?: return null
+        if (verses.isEmpty()) return null
+        var current = verses.first()
+        for (v in verses) {
+            if (v.startMs <= positionMs) current = v else break
+        }
+        return current.verse
+    }
+
+    /** Where to seek to start reading from [verse]: its start, or null when it has no time (no text). */
+    fun seekTarget(timings: ChapterTimings?, verse: Int): Long? =
+        timings?.verses?.firstOrNull { it.verse == verse }?.startMs
 
     /**
      * The next step after the server answered with [httpCode] (and, for errors, [serverMessage]

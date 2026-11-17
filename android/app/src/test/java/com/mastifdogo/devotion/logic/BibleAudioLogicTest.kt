@@ -95,4 +95,75 @@ class BibleAudioLogicTest {
         assertFalse(BibleAudioLogic.isMiniPlayerVisible(null, null, isPlaying = true, positionMs = 5000))
         assertFalse(BibleAudioLogic.isMiniPlayerVisible(john3, null, isPlaying = false, positionMs = 0))
     }
+
+    // ---- verse timings ------------------------------------------------------------------------
+
+    private val json = """
+        {"duration": 20.5, "exact": true, "extra": 1, "verses": [
+          {"verse": 1, "start": 0.0, "end": 6.42},
+          {"verse": 2, "start": 6.67, "end": 11.9, "words": []},
+          {"verse": 4, "start": 12.25}
+        ]}
+    """.trimIndent()
+
+    @Test
+    fun parseTimings_convertsSecondsAndFillsMissingEnds() {
+        val t = BibleAudioLogic.parseTimings(json)!!
+        assertEquals(20_500L, t.durationMs)
+        assertTrue(t.exact)
+        assertEquals(
+            listOf(VerseTime(1, 0, 6420), VerseTime(2, 6670, 11_900), VerseTime(4, 12_250, 20_500)),
+            t.verses,
+        )
+    }
+
+    @Test
+    fun parseTimings_isLenient() {
+        // Missing fields, unordered verses, a verse without a number or a start.
+        val t = BibleAudioLogic.parseTimings(
+            """{"verses":[{"verse":3,"start":9.0},{"start":1.0},{"verse":2},{"verse":1,"start":0.5,"end":4.0},{"verse":0,"start":2.0}]}""",
+        )!!
+        assertFalse(t.exact)
+        assertEquals(0L, t.durationMs)
+        assertEquals(listOf(VerseTime(1, 500, 4000), VerseTime(3, 9000, 9000)), t.verses)
+        // Nothing usable.
+        assertNull(BibleAudioLogic.parseTimings("""{"duration":3.0,"verses":[]}"""))
+        assertNull(BibleAudioLogic.parseTimings("""{"status":"making"}"""))
+        assertNull(BibleAudioLogic.parseTimings("<html>"))
+        assertNull(BibleAudioLogic.parseTimings(""))
+        assertNull(BibleAudioLogic.parseTimings(null))
+    }
+
+    @Test
+    fun verseAt_lastVerseStartedAtOrBeforeThePosition() {
+        val t = BibleAudioLogic.parseTimings(json)
+        assertEquals(1, BibleAudioLogic.verseAt(t, 0))
+        assertEquals(1, BibleAudioLogic.verseAt(t, 6500)) // the pause after verse 1 still belongs to it
+        assertEquals(2, BibleAudioLogic.verseAt(t, 6670))
+        assertEquals(2, BibleAudioLogic.verseAt(t, 12_000))
+        assertEquals(4, BibleAudioLogic.verseAt(t, 12_250))
+        assertEquals(4, BibleAudioLogic.verseAt(t, 999_000))
+        // Before the first start (the chapter announcement): the first verse.
+        val late = BibleAudioLogic.parseTimings("""{"verses":[{"verse":1,"start":2.0},{"verse":2,"start":5.0}]}""")
+        assertEquals(1, BibleAudioLogic.verseAt(late, 0))
+        assertEquals(1, BibleAudioLogic.verseAt(late, -50))
+        assertNull(BibleAudioLogic.verseAt(null, 1000))
+    }
+
+    @Test
+    fun seekTarget_isTheVerseStart() {
+        val t = BibleAudioLogic.parseTimings(json)
+        assertEquals(0L, BibleAudioLogic.seekTarget(t, 1))
+        assertEquals(6670L, BibleAudioLogic.seekTarget(t, 2))
+        assertEquals(12_250L, BibleAudioLogic.seekTarget(t, 4))
+        // Verse 3 has no text, so no time.
+        assertNull(BibleAudioLogic.seekTarget(t, 3))
+        assertNull(BibleAudioLogic.seekTarget(null, 1))
+    }
+
+    @Test
+    fun timingsFileNames() {
+        assertEquals("kjv-42-3.json", BibleAudioLogic.timingsFileName(john3))
+        assertEquals("kjv-42-3.json", BibleAudioLogic.timingsFileFor("kjv-42-3.mp3"))
+    }
 }
