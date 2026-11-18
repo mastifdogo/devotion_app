@@ -56,16 +56,21 @@ object BibleAudioLogic {
         return BibleRef(rest.substring(0, middleColon), book, chapter)
     }
 
-    /** "kjv-42-3.mp3"; characters unsafe in a file name become '_'. */
-    fun fileName(ref: BibleRef): String {
+    /**
+     * "kjv-42-3.mp3"; characters unsafe in a file name become '_'. A chapter read by the speech
+     * service's voice ([premium], which a person chooses in Settings) is kept next to the server's
+     * own voice's as "kjv-42-3-premium.mp3", so switching voice never plays the other one.
+     */
+    fun fileName(ref: BibleRef, premium: Boolean = false): String {
         val safe = ref.bibleId.map { c ->
             if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '_' || c == '.') c else '_'
         }.joinToString("").trim('.').ifEmpty { "bible" }
-        return "$safe-${ref.book}-${ref.chapter}.mp3"
+        return "$safe-${ref.book}-${ref.chapter}${if (premium) "-premium" else ""}.mp3"
     }
 
     /** "kjv-42-3.json": the verse times kept next to the chapter's MP3. */
-    fun timingsFileName(ref: BibleRef): String = fileName(ref).removeSuffix(".mp3") + ".json"
+    fun timingsFileName(ref: BibleRef, premium: Boolean = false): String =
+        fileName(ref, premium).removeSuffix(".mp3") + ".json"
 
     /** The timings file that belongs to an MP3 file name. */
     fun timingsFileFor(mp3Name: String): String = mp3Name.removeSuffix(".mp3") + ".json"

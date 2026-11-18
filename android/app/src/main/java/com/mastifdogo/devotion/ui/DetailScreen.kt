@@ -686,9 +686,9 @@ fun ScrollToggle(vm: MainViewModel, label: String, selected: Boolean, onClick: (
     }
 }
 
-/** "−  [Auto scroll]  +": the toggle, with slower/faster for the scroll speed (disabled at the ends). */
+/** "−  [Auto scroll]  +": the toggle, with slower/faster for the scroll speed (disabled at the ends). Also in the Bible reader. */
 @Composable
-private fun AutoScrollControl(vm: MainViewModel, selected: Boolean, onClick: () -> Unit) {
+fun AutoScrollControl(vm: MainViewModel, selected: Boolean, onClick: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(
             onClick = { vm.stepAutoScrollSpeed(-1) },

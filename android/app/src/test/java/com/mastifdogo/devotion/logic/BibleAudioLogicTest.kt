@@ -40,6 +40,17 @@ class BibleAudioLogicTest {
     }
 
     @Test
+    fun fileName_keepsTheSpeechServicesVoiceApart() {
+        // The server's own voice (Piper) is the plain name; the voice a person asked for has its own files.
+        assertEquals("kjv-42-3.mp3", BibleAudioLogic.fileName(john3, premium = false))
+        assertEquals("kjv-42-3-premium.mp3", BibleAudioLogic.fileName(john3, premium = true))
+        assertEquals("kjv-42-3.json", BibleAudioLogic.timingsFileName(john3))
+        assertEquals("kjv-42-3-premium.json", BibleAudioLogic.timingsFileName(john3, premium = true))
+        // The timings file of either is found from its MP3's name.
+        assertEquals("kjv-42-3-premium.json", BibleAudioLogic.timingsFileFor(BibleAudioLogic.fileName(john3, premium = true)))
+    }
+
+    @Test
     fun nextStep_followsTheServerContract() {
         assertEquals(AudioFetchStep.Ready, BibleAudioLogic.nextStep(200, null, 0))
         // Being made: ask again every 3 s...

@@ -137,7 +137,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const wallpapers = new Wallpapers({ db, dataDir: dir, fetchImpl: whFetch, log: quiet });
 	const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver, log: quiet });
 	const updater = new Updater({ config, settings, fetchImpl: async (url, init) => { calls.github.push({ url: String(url), headers: init.headers }); return github(); } });
-	const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: dir, log: quiet });
+	const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: dir, log: quiet, appVersion: 'tst' });
 	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, bibleAudio, audioDir, log: quiet });
 	await new Promise((r) => server.listen(0, '127.0.0.1', r));
 	const base = `http://127.0.0.1:${server.address().port}`;
@@ -349,7 +349,7 @@ test('premium speech for lessons, daily readings, or both', async (t) => {
 
 	// The choice per kind: lessons by a speech server on the owner's network, daily readings back on Piper.
 	let state = await (await call('/admin/api/state')).json();
-	assert.deepEqual(state.engines, { readings_engine: 'openai', lessons_engine: 'openai', bible_engine: 'none' });
+	assert.deepEqual(state.engines, { readings_engine: 'openai', lessons_engine: 'openai', bible_engine: 'piper' }); // the Bible stays with Piper
 	await call('/admin/api/settings', { body: { lessons_engine: 'local', readings_engine: 'piper', tts_local_base_url: 'http://tts.lan:8880/v1', tts_local_model: 'kokoro', tts_local_voice: 'af_heart', bible_engine: 'bogus' } });
 	await wait((l) => l.find((e) => e.kind === 'lesson').audio.some((a) => a.voice === 'local-af_heart'));
 	list = await entries();
@@ -357,7 +357,7 @@ test('premium speech for lessons, daily readings, or both', async (t) => {
 	assert.deepEqual([calls.speech.at(-1).url, calls.speech.at(-1).auth, calls.speech.at(-1).body.model], ['http://tts.lan:8880/v1/audio/speech', undefined, 'kokoro']);
 	assert.deepEqual((await (await call('/api/voices')).json()), { voices: [{ id: 'voice', name: 'voice', description: '' }, { id: 'local-af_heart', name: 'Local (af_heart)', description: 'Speech server on this network', lessons_only: true }], default: 'voice' });
 	state = await (await call('/admin/api/state')).json();
-	assert.deepEqual(state.engines, { readings_engine: 'piper', lessons_engine: 'local', bible_engine: 'none' });
+	assert.deepEqual(state.engines, { readings_engine: 'piper', lessons_engine: 'local', bible_engine: 'piper' });
 	// No audio for lessons at all.
 	await call('/admin/api/settings', { body: { lessons_engine: 'none' } });
 	assert.equal((await (await call('/api/voices')).json()).voices.length, 1);
@@ -708,13 +708,17 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.deepEqual(await gz.json(), { id: 'tst', name: 'Test Version', language: 'xx', books: [{ name: 'I Book', chapters: [['In the beginning', '', 'third'], ['c2v1']] }] });
 	assert.equal((await call('/api/bibles/nope')).status, 404);
 
-	// Listening: off until an engine is chosen for the Bible; then a chapter is made when first asked for, and kept.
+	// Listening: Piper reads the Bible once it has a voice (nothing to choose); a chapter is made when first asked for, and kept.
 	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 404);
+	assert.equal((await call('/api/bibles/tst/audio/0/1?voice=premium')).status, 404);
 	assert.deepEqual(chapterParts('John', 1, ['a', '', 'c']), [{ verse: 1, text: 'John, chapter 1, verse 1. a' }, { verse: 3, text: 'Verse 3. c' }]);
 	assert.deepEqual(chapterParts('John', 3, ['', 'b']), [{ verse: 2, text: 'Chapter 3, verse 2. b' }]);
 	assert.deepEqual(chapterParts('Psalms', 23, ['x']).concat(chapterParts('Psalms', 1, ['x']), chapterParts('Jude', 1, ['x'])).map((p) => p.text), ['Psalm 23, verse 1. x', 'Psalms, Psalm 1, verse 1. x', 'Jude, verse 1. x']);
-	await call('/admin/api/settings', { body: { piper_model: '/voice.onnx', bible_engine: 'piper' } });
-	assert.equal((await (await call('/api/bibles')).json()).audio, true);
+	await call('/admin/api/settings', { body: { piper_model: '/voice.onnx' } });
+	assert.deepEqual((({ audio, audio_premium }) => [audio, audio_premium])(await (await call('/api/bibles')).json()), [true, undefined]);
+	// A speech API on the internet is not something the server chooses for the Bible.
+	await call('/admin/api/settings', { body: { bible_engine: 'openai' } });
+	assert.equal(settings.get('bible_engine'), '');
 	assert.equal((await call('/api/bibles/tst/audio/0/9')).status, 404);
 	assert.equal((await call('/api/bibles/nope/audio/0/1')).status, 404);
 	const listen = async (url) => { let r; for (let i = 0; i < 100; i++) { r = await call(url); if (r.status !== 202) break; assert.deepEqual(await r.json(), { status: 'making' }); await new Promise((res) => setTimeout(res, 10)); } return r; };
@@ -773,13 +777,44 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.match((await heard.json()).error, /local speech server answered 500: model not loaded/);
 	calls.failSpeech = null;
 	assert.equal((await listen('/api/bibles/tst/audio/0/1')).status, 200);
+	// The speech API reads the Bible only for a person who asks for it (the app's "Bible voice"): its own files, next to Piper's.
+	await call('/admin/api/settings', { body: { bible_engine: 'piper' } });
+	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 404); // no key yet
+	await call('/admin/api/settings', { body: { tts_openai_key: 'sk-test', tts_openai_voice: 'Nova' } });
+	assert.deepEqual((await (await call('/api/bibles')).json()).audio_premium, { id: 'api-nova', name: 'Nova' });
+	calls.speechWav = true;
+	const speechBefore = calls.speech.length, piperBefore = calls.run.filter((c) => c.cmd === 'piper').length;
+	heard = await listen('/api/bibles/tst/audio/0/2?voice=premium');
+	assert.equal(heard.status, 200);
+	assert.deepEqual(calls.speech.slice(speechBefore).map((c) => [c.url, c.auth, c.body.voice, c.body.input]), [['https://api.openai.com/v1/audio/speech', 'Bearer sk-test', 'Nova', 'Chapter 2, verse 1. c2v1']]);
+	assert.deepEqual(await (await call('/api/bibles/tst/audio/0/2/verses?voice=premium')).json(), { duration: 1, exact: true, verses: [{ verse: 1, start: 0, end: 1 }] });
+	// Without asking for it, the same chapter is Piper's, and the speech API hears nothing of it.
+	heard = await listen('/api/bibles/tst/audio/0/2');
+	assert.equal(heard.status, 200);
+	assert.equal(calls.run.filter((c) => c.cmd === 'piper').length, piperBefore + 1);
+	assert.equal(calls.speech.length, speechBefore + 1);
+	calls.speechWav = false;
+	// The owner can keep people from choosing it.
+	await call('/admin/api/settings', { body: { bible_premium: 'off' } });
+	assert.equal((await (await call('/api/bibles')).json()).audio_premium, undefined);
+	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 404);
+	await call('/admin/api/settings', { body: { bible_premium: 'on' } });
+
 	state = await (await call('/admin/api/bible-audio/clear', { body: {} })).json();
 	assert.deepEqual(state.bible_audio, { files: 0, bytes: 0 });
 	await call('/admin/api/settings', { body: { bible_engine: 'none' } });
-	assert.equal((await (await call('/api/bibles')).json()).audio, false);
+	assert.deepEqual((({ audio, audio_premium }) => [audio, audio_premium])(await (await call('/api/bibles')).json()), [false, undefined]);
+	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 404);
 
 	await call('/admin/api/bibles/tst/delete', { body: {} });
 	assert.equal((await call('/api/bibles/tst')).status, 404);
+
+	// The version the app carries with it ("tst" here): the server fetches it by itself when someone listens to it.
+	await call('/admin/api/settings', { body: { bible_engine: 'piper' } });
+	assert.equal((await call('/api/bibles/nope/audio/0/1')).status, 404);
+	assert.equal((await call('/api/bibles/tst/audio/0/1')).status, 202);
+	assert.equal((await listen('/api/bibles/tst/audio/0/1')).status, 200);
+	assert.deepEqual((await (await call('/api/bibles')).json()).bibles.map((b) => b.id), ['tst']);
 });
 
 test('voices: every entry is made in every voice, and the app chooses', async (t) => {

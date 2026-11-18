@@ -33,6 +33,7 @@ import com.mastifdogo.devotion.data.Bible
 import com.mastifdogo.devotion.data.BibleAudioStore
 import com.mastifdogo.devotion.data.BibleInfo
 import com.mastifdogo.devotion.data.BibleStore
+import com.mastifdogo.devotion.data.BiblesResponse
 import com.mastifdogo.devotion.data.Entry
 import com.mastifdogo.devotion.data.EntryReference
 import com.mastifdogo.devotion.data.EntryStore
@@ -121,7 +122,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsStore(application)
     private val store = EntryStore(application.filesDir)
     private val annotationStore = AnnotationStore(application.filesDir)
-    private val bibleStore = BibleStore(application.filesDir)
+    // The King James Version comes with the app (an asset), so the Bible opens before any server is reached.
+    private val bibleStore = BibleStore(application.filesDir) { application.assets.open(BibleStore.BUNDLED_ASSET) }
     private val api = ApiClient()
     private val updater = Updater(application.cacheDir)
     private val wallpaperStore = WallpaperStore(application.filesDir)
@@ -141,6 +143,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         screen = target
         if (target is Screen.Settings) {
             refreshVoices()
+            refreshBibleAudioInfo()
             refreshSyncStatus()
             refreshChapterAudioCache()
         }
@@ -752,6 +755,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     stopPlayback()
                 }
                 refreshVoices()
+                refreshBibleAudioInfo()
                 deleteOtherVoices()
                 if (autoDownload) startAutoDownload()
                 reportBibles()
@@ -859,6 +863,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val key = serverKey
         preferredVoice = if (isServerConfigured) settings.preferredVoice(key) else null
         applyVoicesJson(if (isServerConfigured) settings.voicesJson(key) else null)
+        biblePremiumChosen = isServerConfigured && settings.biblePremium(key)
     }
 
     private fun applyVoicesJson(json: String?) {
@@ -1395,7 +1400,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var chapterAudioJob: Job? = null
 
-    fun isChapterAudioCached(ref: BibleRef): Boolean = BibleAudioLogic.fileName(ref) in cachedChapterAudio
+    /** Whether the chapter's audio, in the voice the Bible is listened to in, is on the phone. */
+    fun isChapterAudioCached(ref: BibleRef): Boolean = BibleAudioLogic.fileName(ref, biblePremium) in cachedChapterAudio
+
+    // The Bible is read by the server's own voice (Piper, unless its owner chose otherwise). A
+    // speech service on the internet reads it only for a person who asks for that here, in
+    // Settings, and only where the server offers it.
+
+    /** The name of the speech service's voice the server offers for the Bible; null when it offers none. */
+    var biblePremiumName: String? by mutableStateOf(settings.biblePremiumName.takeIf { it.isNotBlank() })
+        private set
+
+    /** The user asked for the speech service's voice for the Bible on this server. */
+    var biblePremiumChosen: Boolean by mutableStateOf(false)
+        private set
+
+    /** Whether chapters are asked for, kept and played in the speech service's voice. */
+    val biblePremium: Boolean
+        get() = biblePremiumChosen && biblePremiumName != null
+
+    /** Settings, "Bible voice": the server's own voice (false) or the speech service's (true). */
+    fun updateBiblePremium(premium: Boolean) {
+        if (premium == biblePremiumChosen) return
+        val before = biblePremium
+        biblePremiumChosen = premium
+        settings.setBiblePremium(serverKey, premium)
+        if (biblePremium != before) dropLoadedChapter()
+    }
+
+    /** The loaded chapter is in the other voice now: stop it, so the next Listen gets the right one. */
+    private fun dropLoadedChapter() {
+        cancelChapterAudio()
+        if (playerBibleRef != null) stopPlayback()
+    }
+
+    /** What the server said about reading the Bible aloud (GET /api/bibles). */
+    private fun applyBibleAudioInfo(response: BiblesResponse) {
+        // Remembered so chapters already on the phone can be listened to offline.
+        bibleAudioAvailable = response.audio
+        settings.bibleAudioAvailable = response.audio
+        val offered = response.audioPremium
+        val name = offered?.name?.takeIf { it.isNotBlank() } ?: offered?.id?.takeIf { it.isNotBlank() }
+        settings.biblePremiumName = name ?: ""
+        val before = biblePremium
+        biblePremiumName = name
+        if (biblePremium != before) dropLoadedChapter()
+    }
+
+    /**
+     * Asks the server whether it reads the Bible aloud and in which voices. The Bible itself needs
+     * no server (one version comes with the app), so this is asked for on its own: after a sync and
+     * when the Bible tab or Settings opens. Quiet when the server cannot be reached.
+     */
+    private fun refreshBibleAudioInfo() {
+        if (!isServerConfigured) return
+        val url = serverUrl
+        val key = serverKey
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) { api.biblesResponse(url) }
+                if (serverKey == key) applyBibleAudioInfo(response)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Offline or an older server: what was known stays.
+            }
+        }
+    }
 
     private fun refreshChapterAudioCache() {
         viewModelScope.launch {
@@ -1419,16 +1490,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         requestNotificationPermissionOnce()
         chapterAudioJob?.cancel()
         val url = serverUrl
+        // Changing the voice cancels this job (see dropLoadedChapter), so it is the same to the end.
+        val premium = biblePremium
         chapterAudioJob = viewModelScope.launch {
             try {
-                val cached = withContext(Dispatchers.IO) { bibleAudioStore.file(ref).isFile }
+                val cached = withContext(Dispatchers.IO) { bibleAudioStore.file(ref, premium).isFile }
                 if (!cached) {
                     preparingChapter = ref
-                    bibleAudioStore.fetch(api, url, ref)
+                    bibleAudioStore.fetch(api, url, ref, premium)
                 }
                 preparingChapter = null
                 // Where the tapped verse starts, if the chapter has verse times.
-                val timings = withContext(Dispatchers.IO) { bibleAudioStore.loadTimings(ref) }
+                val timings = withContext(Dispatchers.IO) { bibleAudioStore.loadTimings(ref, premium) }
                 val startMs = fromVerse?.let { BibleAudioLogic.seekTarget(timings, it) } ?: 0L
                 startChapterPlayback(ref, title, versionName, timings, startMs)
             } catch (e: CancellationException) {
@@ -1474,10 +1547,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadChapterTimings(ref: BibleRef) {
         val url = serverUrl
         val canAsk = isServerConfigured
+        val premium = biblePremium
         viewModelScope.launch {
             val timings = withContext(Dispatchers.IO) {
-                bibleAudioStore.loadTimings(ref)
-                    ?: if (canAsk && bibleAudioStore.fetchTimingsQuietly(api, url, ref)) bibleAudioStore.loadTimings(ref) else null
+                bibleAudioStore.loadTimings(ref, premium)
+                    ?: if (canAsk && bibleAudioStore.fetchTimingsQuietly(api, url, ref, premium)) {
+                        bibleAudioStore.loadTimings(ref, premium)
+                    } else {
+                        null
+                    }
             }
             if (playerBibleRef == ref) chapterTimings = timings
         }
@@ -1490,7 +1568,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         timings: ChapterTimings?,
         startMs: Long,
     ) {
-        val file = bibleAudioStore.file(ref)
+        val premium = biblePremium
+        val file = bibleAudioStore.file(ref, premium)
         if (!file.isFile) {
             chapterAudioError = ref to "The audio file is missing; please try again."
             return
@@ -1516,8 +1595,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Played now: least recently played chapters go first when the cache is over its limit.
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                bibleAudioStore.touch(ref)
-                bibleAudioStore.trim(keep = ref)
+                bibleAudioStore.touch(ref, premium)
+                bibleAudioStore.trim(keep = ref, premium = premium)
             }
             refreshChapterAudioCache()
         }
@@ -1592,6 +1671,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         bibleError = null
         bibleNotice = null
         val preferred = preferredBibleId()
+        refreshBibleAudioInfo()
         when {
             openBible != null || bibleLoading -> if (effectiveBibleView == BibleView.VERSIONS) refreshServerBibles()
             preferred != null -> openBibleVersion(preferred)
@@ -1819,9 +1899,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val response = withContext(Dispatchers.IO) { api.biblesResponse(url) }
                 serverBibles = response.bibles
                 serverBiblesLoaded = true
-                // Remembered so chapters already on the phone can be listened to offline.
-                bibleAudioAvailable = response.audio
-                settings.bibleAudioAvailable = response.audio
+                applyBibleAudioInfo(response)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1858,6 +1936,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /** Whether [info] is the version that comes with the app (and not a copy downloaded from the server). */
+    fun isBundledBible(info: BibleInfo): Boolean = info == BibleStore.BUNDLED
 
     fun deleteBible(info: BibleInfo) {
         if (openBible?.id == info.id) {

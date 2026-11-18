@@ -213,6 +213,18 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_BIBLE_AUDIO, false)
         set(value) = prefs.edit().putBoolean(KEY_BIBLE_AUDIO, value).apply()
 
+    /** The name of the speech service's voice the server last offered for the Bible; "" when it offers none. */
+    var biblePremiumName: String
+        get() = prefs.getString(KEY_BIBLE_PREMIUM_NAME, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BIBLE_PREMIUM_NAME, value).apply()
+
+    /** Whether the user asked for the speech service's voice for the Bible on this server (off until they do). */
+    fun biblePremium(serverKey: String): Boolean = prefs.getBoolean(KEY_BIBLE_PREMIUM + serverKey, false)
+
+    fun setBiblePremium(serverKey: String, value: Boolean) {
+        prefs.edit().putBoolean(KEY_BIBLE_PREMIUM + serverKey, value).apply()
+    }
+
     // ---- Bible reader position --------------------------------------------------------------
 
     var bibleId: String
@@ -263,6 +275,8 @@ class SettingsStore(context: Context) {
         const val KEY_DARK_UNTIL = "wallpaper_dark_until"
         const val KEY_WALL_BIAS = "wallpaper_bias"
         const val KEY_BIBLE_AUDIO = "bible_audio_available"
+        const val KEY_BIBLE_PREMIUM_NAME = "bible_premium_name"
+        const val KEY_BIBLE_PREMIUM = "bible_premium_"
         const val KEY_BIBLE_ID = "bible_id"
         const val KEY_BIBLE_BOOK = "bible_book"
         const val KEY_BIBLE_CHAPTER = "bible_chapter"

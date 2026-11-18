@@ -31,7 +31,9 @@ export const DEFAULTS = {
 	// What reads each kind of text: piper | openai | local | none. Empty: as set up before there was a choice (above).
 	readings_engine: '',
 	lessons_engine: '',
-	bible_engine: '', // empty: none (the Bible is read aloud on demand, chapter by chapter)
+	bible_engine: '', // piper | local | none; empty: piper (the Bible is read aloud on demand, chapter by chapter)
+	// Whether a person may ask in the app for the speech API (internet) to read the Bible to them instead.
+	bible_premium: 'on', // on | off
 	// A speech server on the owner's network that speaks OpenAI's /audio/speech API (Kokoro-FastAPI, openedai-speech, LocalAI...).
 	tts_local_base_url: '', // http://192.168.1.50:8880/v1
 	tts_local_key: '', // most need none
@@ -114,7 +116,9 @@ export class Settings {
 			if (key === 'backup_keep' && !/^[1-9]\d{0,2}$/.test(v)) continue;
 			if (key === 'timezone' && !validTimeZone(v)) continue;
 			if (key === 'tts_provider' && !['piper', 'openai', 'none'].includes(v)) continue;
-			if (['readings_engine', 'lessons_engine', 'bible_engine'].includes(key) && !['piper', 'openai', 'local', 'none'].includes(v)) continue;
+			if (['readings_engine', 'lessons_engine'].includes(key) && !['piper', 'openai', 'local', 'none'].includes(v)) continue;
+			if (key === 'bible_engine' && !['piper', 'local', 'none'].includes(v)) continue;
+			if (key === 'bible_premium' && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_local_base_url' && v !== '' && !/^https?:\/\/[^\s"'<>]+$/i.test(v)) continue;
 			if ((key === 'premium_lessons' || key === 'premium_readings') && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;

@@ -37,8 +37,12 @@ export function chapterParts(bookName, chapter, verses) {
 }
 
 export class BibleAudio {
-	constructor({ bibles, tts, settings, dataDir, log = console }) {
-		Object.assign(this, { bibles, tts, settings, log });
+	/**
+	 * appVersion: the version the app carries with it. People read it there without this server
+	 * having it, so the server fetches it by itself the first time someone listens to it.
+	 */
+	constructor({ bibles, tts, settings, dataDir, log = console, appVersion = 'kjv' }) {
+		Object.assign(this, { bibles, tts, settings, log, appVersion });
 		this.dir = path.join(dataDir, 'bible-audio');
 		this.making = new Map(); // file name -> promise
 		this.failed = new Map(); // file name -> message, until asked again
@@ -46,7 +50,33 @@ export class BibleAudio {
 	}
 
 	enabled() {
-		return this.tts.bibleVoiceId() !== null;
+		return this.tts.bibleVoiceId() !== null || this.premium() !== null;
+	}
+
+	/** The speech API voice a person can ask for instead of the server's own: { id, name }, or null. */
+	premium() {
+		return this.tts.biblePremiumVoice?.() ?? null;
+	}
+
+	/** Starts downloading the version the app carries; the chapter is "being made" meanwhile. */
+	fetchVersion(id) {
+		const key = `version:${id}`;
+		const error = this.failed.get(key);
+		if (error) {
+			this.failed.delete(key);
+			throw new BibleAudioError(error, 502);
+		}
+		if (!this.making.has(key)) {
+			const job = this.bibles.install(id)
+				.then(() => this.log.info?.(`bible audio: added the ${id} version to read it aloud`))
+				.catch((err) => {
+					this.log.error(`bible audio: getting the ${id} version: ${err.message}`);
+					this.failed.set(key, `The server could not get this Bible version to read it aloud: ${err.message}`);
+				})
+				.finally(() => this.making.delete(key));
+			this.making.set(key, job);
+		}
+		return { state: 'making' };
 	}
 
 	async version(id) {
@@ -63,10 +93,12 @@ export class BibleAudio {
 	 * { state: 'making' } after starting it. info says when each verse is heard:
 	 * { duration, exact, verses: [{ verse, start, end }] } in seconds. Throws when
 	 * it is off, when there is no such chapter, or with the reason the last attempt failed (once).
+	 * premium: read by the speech API's voice, which only a person asking for it in the app gets.
 	 */
-	async get(versionId, book, chapter) {
-		const voice = this.tts.bibleVoiceId();
-		if (!voice) throw new BibleAudioError('Listening to the Bible is not switched on for this server.', 404);
+	async get(versionId, book, chapter, { premium = false } = {}) {
+		const voice = premium ? this.premium()?.id ?? null : this.tts.bibleVoiceId();
+		if (!voice) throw new BibleAudioError(premium ? 'The speech service does not read the Bible on this server.' : 'Listening to the Bible is not switched on for this server.', 404);
+		if (versionId === this.appVersion && !this.bibles.get(versionId) && this.bibles.catalog.some((c) => c.id === versionId)) return this.fetchVersion(versionId);
 		const bible = await this.version(versionId);
 		const verses = bible.books[book]?.chapters[chapter - 1];
 		if (!verses) throw new BibleAudioError('No such chapter.', 404);

@@ -203,12 +203,17 @@ export class Tts {
 	 * What was chosen to read this kind of text: 'piper', 'openai' (a speech
 	 * API on the internet), 'local' (a speech server on the owner's network
 	 * that speaks the same API) or 'none'. kind: 'lesson', 'daily_reading' or 'bible'.
-	 * Servers set up before there was a choice per kind keep what they had.
+	 * Servers set up before there was a choice per kind keep what they had for entries.
 	 */
 	chosenEngine(kind) {
 		const chosen = this.settings.get(kind === 'bible' ? 'bible_engine' : kind === 'lesson' ? 'lessons_engine' : 'readings_engine');
+		if (kind === 'bible') {
+			// Piper reads the Bible unless the owner chose otherwise. A speech API on the internet is never
+			// the server's own choice here: it reads a chapter only for a person who asks for it in the app.
+			if (['piper', 'local', 'none'].includes(chosen)) return chosen;
+			return this.piperVoices().length ? 'piper' : 'none';
+		}
 		if (ENGINES.includes(chosen)) return chosen;
-		if (kind === 'bible') return 'none';
 		const old = this.settings.get('tts_provider');
 		if (old !== 'piper') return old === 'openai' ? 'openai' : 'none';
 		return this.settings.get(kind === 'lesson' ? 'premium_lessons' : 'premium_readings') === 'on' ? 'openai' : 'piper';
@@ -303,11 +308,22 @@ export class Tts {
 		return this.apiVoice(engine).id;
 	}
 
+	/**
+	 * The speech API voice a person can ask for in the app to have the Bible read in: { id, name },
+	 * or null when there is no key for it, the owner switched that off, or the Bible is not read aloud at all.
+	 */
+	biblePremiumVoice() {
+		if (this.settings.get('bible_engine') === 'none' || this.settings.get('bible_premium') === 'off' || !this.apiReady('openai')) return null;
+		const voice = this.settings.get('tts_openai_voice');
+		return { id: openaiVoiceId(voice), name: voice };
+	}
+
 	/** Why audio can't be made right now, or null when it can. */
 	notReady() {
 		const engines = this.entryEngines();
 		if (!engines.length) return 'Audio is turned off.';
-		const plan = this.plan();
+		// By what reads the entries: Piper reading only the Bible must not hold up entries a speech service reads.
+		const plan = this.planImpl(engines.includes('piper') ? 'piper' : 'openai');
 		if (plan.audioJobs === 0) return plan.note;
 		if (engines.includes('piper') && !this.piperVoices().length) return 'No piper voice model is configured.';
 		if (engines.includes('openai') && !this.apiReady('openai')) return 'No API key is set for the speech service.';

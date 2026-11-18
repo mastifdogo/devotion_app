@@ -211,11 +211,17 @@ data class BibleInfo(
     val sha256: String? = null,
 )
 
+/** The speech service's voice a person may choose for the Bible, instead of the server's own. */
+@Serializable
+data class BiblePremiumVoice(val id: String = "", val name: String = "")
+
 @Serializable
 data class BiblesResponse(
     val bibles: List<BibleInfo> = emptyList(),
     /** Whether the server can read Bible chapters aloud (absent on older servers = false). */
     val audio: Boolean = false,
+    /** Set when the server lets a person ask for the speech service's voice for the Bible. */
+    @SerialName("audio_premium") val audioPremium: BiblePremiumVoice? = null,
 )
 
 @Serializable

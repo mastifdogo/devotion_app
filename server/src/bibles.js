@@ -49,6 +49,20 @@ export function convert(entry, source) {
 	return { id: entry.id, name: entry.name, language: entry.language, books };
 }
 
+/** Downloads a catalogue version, checks it against its checksum and returns it in the app's form (JSON, as a Buffer). */
+export async function download(entry, fetchImpl = fetch) {
+	let res;
+	try {
+		res = await fetchImpl(`${SOURCE}/${entry.file}.json`);
+	} catch (err) {
+		throw new BibleError(`Could not reach the download site: ${err.cause?.code || err.message}`, 502);
+	}
+	if (!res.ok) throw new BibleError(`The download site answered ${res.status}.`, 502);
+	const raw = Buffer.from(await res.arrayBuffer());
+	if (createHash('sha256').update(raw).digest('hex') !== entry.sha256) throw new BibleError('The download does not match its checksum.', 502);
+	return Buffer.from(JSON.stringify(convert(entry, JSON.parse(raw.toString('utf8')))));
+}
+
 export class Bibles {
 	constructor({ db, dataDir, fetchImpl = fetch, catalog = CATALOG }) {
 		this.db = db;
@@ -82,16 +96,7 @@ export class Bibles {
 		if (this.busy.has(id)) throw new BibleError('This version is already being downloaded.', 409);
 		this.busy.add(id);
 		try {
-			let res;
-			try {
-				res = await this.fetch(`${SOURCE}/${entry.file}.json`);
-			} catch (err) {
-				throw new BibleError(`Could not reach the download site: ${err.cause?.code || err.message}`, 502);
-			}
-			if (!res.ok) throw new BibleError(`The download site answered ${res.status}.`, 502);
-			const raw = Buffer.from(await res.arrayBuffer());
-			if (createHash('sha256').update(raw).digest('hex') !== entry.sha256) throw new BibleError('The download does not match its checksum.', 502);
-			const data = Buffer.from(JSON.stringify(convert(entry, JSON.parse(raw.toString('utf8')))));
+			const data = await download(entry, this.fetch);
 			await mkdir(this.dir, { recursive: true });
 			await writeFile(this.file(id) + '.part', data);
 			await rename(this.file(id) + '.part', this.file(id));

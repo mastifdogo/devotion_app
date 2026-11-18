@@ -99,6 +99,10 @@ fun SettingsScreen(vm: MainViewModel) {
                 VoiceSection(vm)
                 SectionDivider()
             }
+            if (vm.bibleAudioAvailable && vm.biblePremiumName != null) {
+                BibleVoiceSection(vm)
+                SectionDivider()
+            }
             AppearanceSection(vm)
             SectionDivider()
             WallpaperSection(vm)
@@ -373,6 +377,56 @@ private fun VoiceSection(vm: MainViewModel) {
     Text(
         text = "Only this voice is kept on the phone: changing it deletes the other voices' audio " +
             "(archived entries keep theirs) and downloads this one.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
+ * Who reads the Bible aloud: the server's own voice unless the user asks for the speech service's
+ * here. Shown only for servers that offer the choice.
+ */
+@Composable
+private fun BibleVoiceSection(vm: MainViewModel) {
+    SectionTitle("Bible voice")
+    val premiumName = vm.biblePremiumName ?: return
+    val choices = listOf(
+        Triple(false, "Server voice (Piper)", "Read on your server; nothing leaves it."),
+        Triple(
+            true,
+            "$premiumName (speech service)",
+            "Each chapter you listen to is sent to the speech service on the internet to be read. " +
+                "The service bills the server's owner.",
+        ),
+    )
+    for ((premium, name, description) in choices) {
+        val selected = vm.biblePremiumChosen == premium
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectable(
+                    selected = selected,
+                    role = Role.RadioButton,
+                    onClick = { vm.updateBiblePremium(premium) },
+                )
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = null)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(text = name, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    Text(
+        text = "The Bible is read by the server's voice unless you choose the speech service here. " +
+            "Chapters are kept on the phone separately for each.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

@@ -464,8 +464,8 @@ function renderBible(pane, pos) {
 	const ch = Math.min(Math.max(1, pos.chapter || 1), book.chapters.length);
 	const wrap = el('div', null, 'verses-wrap');
 	wrap.append(el('div', bible.name, 'label'), el('h2', `${book.name} ${ch}`));
-	const listen = bibleAudio ? listenCard(pane, version, pos.book, ch, () => verses) : null;
-	if (listen) wrap.append(listen);
+	const listen = listenCard(pane, version, pos.book, ch, () => verses);
+	wrap.append(listen);
 	const verses = el('div', null, 'verses');
 	const target = { bible_id: version, book: pos.book, chapter: ch };
 	const texts = book.chapters[ch - 1];
@@ -488,11 +488,11 @@ function renderBible(pane, pos) {
 			if (pos.verse && n >= pos.verse && n <= (pos.verseEnd || pos.verse)) { p.className = 'hit'; first ||= p; }
 			verses.append(p);
 		});
-		listen?._mark();
 	};
 	verses._draw();
 	// A verse's number starts the reading from that verse.
-	if (listen) verses.addEventListener('click', (ev) => { const sup = ev.target.closest('sup'); if (sup) listen._startAt(Number(sup.parentElement.dataset.v)); });
+	verses.classList.toggle('can-start', bibleAudio);
+	if (bibleAudio) verses.addEventListener('click', (ev) => { const sup = ev.target.closest('sup'); if (sup) listen._startAt(Number(sup.parentElement.dataset.v)); });
 	wrap.append(verses);
 	const nav = el('div', null, 'chapnav');
 	const prev = el('button', '← Previous'); prev.disabled = ch <= 1 && pos.book === 0;
@@ -510,50 +510,43 @@ function renderBible(pane, pos) {
 	});
 }
 
-// Listening to a chapter: the server reads it the first time anyone asks, which takes a moment;
-// until it is ready the server answers "making" and this asks again. The server also says when
-// each verse is heard, so the verse being read is kept in view (it is not marked), and a verse's number
-// starts the reading there.
+// A chapter's card: listening, and the scroll control (see scrollControl). The server reads a chapter
+// the first time anyone asks, which takes a moment; until it is ready it answers "making" and this
+// asks again. The server also says when each verse is heard, so while the audio plays the verse being
+// read is kept in the middle of the screen ("Follow"; it is not marked), and a verse's number starts
+// the reading there. While nothing plays, "Auto scroll" moves the chapter up at a steady pace, as in a
+// reading. On a server that does not read the Bible aloud, the card holds the auto scroll alone.
 function listenCard(pane, version, book, chapter, versesBox) {
 	const url = `/api/bibles/${encodeURIComponent(version)}/audio/${book}/${chapter}`;
 	const box = el('div', null, 'card player');
-	const button = el('button', '▶ Listen', 'follow'); button.type = 'button';
+	const button = el('button', '▶ Listen', 'follow'); button.type = 'button'; button.hidden = !bibleAudio;
 	const note = el('span', null, 'small muted');
 	const player = el('audio'); player.controls = true; player.preload = 'none'; player.hidden = true;
-	const followBtn = el('button', 'Follow', 'follow'); followBtn.type = 'button'; followBtn.hidden = true; followBtn.title = 'Keep the verse being read in view';
 	const speedSel = el('select'); speedSel.setAttribute('aria-label', 'Speed'); speedSel.hidden = true;
 	for (const s of ['0.75', '1', '1.25', '1.5', '1.75', '2']) { const o = el('option', s + '×'); o.value = s; speedSel.append(o); }
 	speedSel.value = store.get('read.speed', '1');
 	speedSel.onchange = () => { store.set('read.speed', speedSel.value); player.playbackRate = Number(speedSel.value); };
 	player.addEventListener('play', () => { player.playbackRate = Number(speedSel.value); });
 
-	let times = [], current = null, follow = true, asking = false, loaded = false, startVerse = null, lastAuto = 0;
-	const verseAt = (t) => { let v = times[0]?.verse ?? null; for (const x of times) { if (x.start <= t + 0.05) v = x.verse; else break; } return v; };
-	const scroller = () => (wide.matches ? pane : document.scrollingElement);
-	box._mark = () => {
-		const host = versesBox();
-		if (!host) return;
-		host.classList.toggle('can-start', loaded || bibleAudio);
-		if (current == null) return;
-		const p = host.querySelector(`p[data-v="${current}"]`);
-		if (!p) return;
-		if (follow && !player.paused) {
-			const r = p.getBoundingClientRect();
-			const view = wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight };
-			const delta = r.top + r.height / 2 - (view.top + view.height / 2);
-			if (Math.abs(delta) > 8) { lastAuto = Date.now(); scroller().scrollBy({ top: delta, behavior: 'smooth' }); }
-		}
+	let times = [], asking = false, loaded = false, startVerse = null;
+	// Where the words being read are on the screen: in the verse being read, as far down it as the voice is through it.
+	const spokenY = () => {
+		if (!loaded || !times.length) return null;
+		const t = player.currentTime;
+		let now = times[0];
+		for (const x of times) { if (x.start <= t + 0.05) now = x; else break; }
+		const p = versesBox()?.querySelector(`p[data-v="${now.verse}"]`);
+		if (!p) return null;
+		const r = p.getBoundingClientRect();
+		const through = now.end > now.start ? Math.max(0, Math.min(1, (t - now.start) / (now.end - now.start))) : 0;
+		const line = Math.min(r.height, parseFloat(getComputedStyle(p).lineHeight) || 24);
+		return r.top + line / 2 + (r.height - line) * through;
 	};
-	const tick = () => { const v = loaded ? verseAt(player.currentTime) : null; if (v !== current) { current = v; box._mark(); } };
-	for (const ev of ['timeupdate', 'seeked', 'play']) player.addEventListener(ev, tick);
-	const showFollow = () => { followBtn.setAttribute('aria-pressed', String(follow)); };
-	followBtn.onclick = () => { follow = !follow; showFollow(); if (follow) box._mark(); };
-	// Scrolling by hand lets go of the verse; the Follow button takes hold again.
-	const letGo = () => { if (box.isConnected && follow && !player.paused && Date.now() - lastAuto > 900) { follow = false; showFollow(); } };
-	const bound = wide.matches ? pane : window;
-	bound.addEventListener('wheel', letGo, { passive: true });
-	bound.addEventListener('touchmove', letGo, { passive: true });
-	const watch = setInterval(() => { if (!box.isConnected) { clearInterval(watch); bound.removeEventListener('wheel', letGo); bound.removeEventListener('touchmove', letGo); } }, 2000);
+	// Following is on for the Bible until it is switched off here.
+	const scroll = scrollControl(pane, player, { spokenY, followKey: 'read.bibleFollow', followDefault: '1', bothWays: true });
+	// As in a reading, the speed is only shown while the audio plays.
+	const showSpeed = () => { speedSel.hidden = !loaded || player.paused || player.ended; };
+	for (const ev of ['play', 'pause', 'ended']) player.addEventListener(ev, showSpeed);
 
 	const begin = () => {
 		if (startVerse != null) { const t = times.find((x) => x.verse === startVerse); if (t) player.currentTime = t.start; startVerse = null; }
@@ -569,11 +562,10 @@ function listenCard(pane, version, book, chapter, versesBox) {
 				const j = await r.json().catch(() => ({}));
 				if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
 				times = Array.isArray(j.verses) ? j.verses : [];
-				note.textContent = ''; button.hidden = true; player.hidden = false; speedSel.hidden = false; followBtn.hidden = !times.length;
-				loaded = true; showFollow();
+				note.textContent = ''; button.hidden = true; player.hidden = false;
+				loaded = true;
 				player.src = url;
 				if (startVerse != null) player.addEventListener('loadedmetadata', begin, { once: true }); else begin();
-				box._mark();
 				return;
 			}
 			if (box.isConnected) throw new Error('This is taking too long; try again in a while.');
@@ -582,12 +574,13 @@ function listenCard(pane, version, book, chapter, versesBox) {
 		} finally { asking = false; button.disabled = false; }
 	};
 	button.onclick = ask;
+	// A verse's number: read from there, and follow it.
 	box._startAt = (verse) => {
-		follow = true; showFollow();
-		if (loaded) { startVerse = verse; begin(); return; }
-		startVerse = verse; ask();
+		startVerse = verse;
+		if (loaded) begin(); else ask();
+		scroll._hold();
 	};
-	box.append(button, note, player, followBtn, speedSel);
+	box.append(button, note, player, scroll, speedSel);
 	return box;
 }
 
@@ -940,7 +933,23 @@ function renderEntry(pane, e) {
 		load(false);
 		box.append(player);
 		if (audio.length > 1) box.append(voiceSel);
-		box.append(scrollControl(pane, e, player), speedSel);
+		// There are no word timings for a reading, so the place is worked out from how far through the audio it is.
+		const spokenY = () => {
+			const d = player.duration;
+			if (!d || !Number.isFinite(d) || !e.body) return null;
+			const intro = e.speech_offset || 0;
+			const at = Math.max(0, Math.min(e.body.length, (player.currentTime / d) * (intro + e.body.length) - intro));
+			for (const sp of pane.querySelectorAll('.body [data-s]')) {
+				if (at > Number(sp.dataset.e) || !sp.firstChild) continue;
+				const r = document.createRange();
+				const off = Math.max(0, Math.min(sp.firstChild.length, Math.round(at - Number(sp.dataset.s))));
+				r.setStart(sp.firstChild, off); r.setEnd(sp.firstChild, off);
+				const rect = r.getClientRects()[0] || sp.getBoundingClientRect();
+				return rect.top + rect.height / 2;
+			}
+			return null;
+		};
+		box.append(scrollControl(pane, player, { spokenY }), speedSel);
 		// The speed is only shown while the audio plays.
 		const showSpeed = () => { speedSel.hidden = player.paused || player.ended; };
 		for (const ev of ['play', 'pause', 'ended']) player.addEventListener(ev, showSpeed);
@@ -949,7 +958,7 @@ function renderEntry(pane, e) {
 	} else if (e.body) {
 		// No audio: only the auto scroll.
 		const box = el('div', null, 'card player');
-		box.append(scrollControl(pane, e, null));
+		box.append(scrollControl(pane, null));
 		art.append(box);
 	}
 	const body = el('div', null, 'body');
@@ -965,13 +974,16 @@ function renderEntry(pane, e) {
 	pane.scrollTop = 0;
 }
 
-// The scroll control, between the voice and the speed. While the audio plays it is "Follow": once
-// the voice has read as far as the middle of the screen, the text glides to keep the words being
-// read there, to the end (there are no word timings, so the place is worked out from how far
-// through the audio it is). While nothing plays it is "Auto scroll", with − and + for its pace.
-// Scrolling by hand lets go; the button takes hold again. The screen is kept awake meanwhile.
+// The scroll control of a reading and of a Bible chapter, between the voice and the speed. While the
+// audio plays it is "Follow": the text glides to keep the words being read in the middle of the
+// screen (spokenY says where they are on the screen now). While nothing plays it is "Auto scroll",
+// with − and + for its pace. Scrolling by hand lets go; the button takes hold again. The screen is
+// kept awake meanwhile.
+//   followKey, followDefault  where the choice to follow is remembered, and what it is until made
+//   bothWays                  also glide back up (a chapter can be started from any verse); a reading
+//                             only moves down, once the voice has read as far as the middle
 const AUTO_SPEEDS = [8, 12, 16, 22, 30, 40, 55, 75]; // pixels a second
-function scrollControl(pane, e, player) {
+function scrollControl(pane, player, { spokenY = () => null, followKey = 'read.follow', followDefault = '0', bothWays = false } = {}) {
 	const wrap = el('span', null, 'scrollctl');
 	const slower = el('button', '−', 'follow step'); slower.type = 'button'; slower.title = 'Slower'; slower.setAttribute('aria-label', 'Scroll slower');
 	const button = el('button', null, 'follow'); button.type = 'button';
@@ -979,7 +991,7 @@ function scrollControl(pane, e, player) {
 	wrap.append(slower, button, faster);
 
 	const playing = () => Boolean(player) && !player.paused && !player.ended;
-	let follow = store.get('read.follow', '0') === '1'; // holding on to the voice
+	let follow = store.get(followKey, followDefault) === '1'; // holding on to the voice
 	let auto = false; // scrolling at a steady pace
 	let speed = Math.max(0, Math.min(AUTO_SPEEDS.length - 1, Number(store.get('read.autoSpeed', '3')) || 0));
 	let target = 0, carry = 0, last = 0, lastLook = 0, frame = 0, lock = null;
@@ -1003,26 +1015,11 @@ function scrollControl(pane, e, player) {
 	// The pane scrolls on a desktop; the page on a phone.
 	const scroller = () => (wide.matches ? pane : document.scrollingElement);
 	const view = () => (wide.matches ? pane.getBoundingClientRect() : { top: 0, height: innerHeight });
-	const spokenY = () => {
-		const d = player.duration;
-		if (!d || !Number.isFinite(d) || !e.body) return null;
-		const intro = e.speech_offset || 0;
-		const at = Math.max(0, Math.min(e.body.length, (player.currentTime / d) * (intro + e.body.length) - intro));
-		for (const sp of pane.querySelectorAll('.body [data-s]')) {
-			if (at > Number(sp.dataset.e) || !sp.firstChild) continue;
-			const r = document.createRange();
-			const off = Math.max(0, Math.min(sp.firstChild.length, Math.round(at - Number(sp.dataset.s))));
-			r.setStart(sp.firstChild, off); r.setEnd(sp.firstChild, off);
-			const box = r.getClientRects()[0] || sp.getBoundingClientRect();
-			return box.top + box.height / 2;
-		}
-		return null;
-	};
 	// One step each frame: whole pixels now, the fraction carried to the next frame, so it glides.
 	const move = (px) => {
 		carry += px;
 		const whole = Math.trunc(carry);
-		if (whole < 1) return;
+		if (!whole) return;
 		carry -= whole;
 		const sc = scroller();
 		const before = sc.scrollTop;
@@ -1041,10 +1038,12 @@ function scrollControl(pane, e, player) {
 					lastLook = now;
 					const y = spokenY();
 					const v = view();
-					target = y == null ? 0 : Math.max(0, y - (v.top + v.height / 2));
+					target = y == null ? 0 : y - (v.top + v.height / 2);
+					if (!bothWays) target = Math.max(0, target);
 				}
-				if (target > 0.5) {
-					const step = Math.min(target, Math.max(target * 2.5, 12) * dt);
+				if (Math.abs(target) > 0.5) {
+					const far = Math.abs(target);
+					const step = Math.sign(target) * Math.min(far, Math.max(far * 2.5, 12) * dt);
 					target -= step;
 					move(step);
 				}
@@ -1078,15 +1077,17 @@ function scrollControl(pane, e, player) {
 	const watch = setInterval(() => { if (!button.isConnected) stop(); }, 2000);
 
 	button.onclick = () => {
-		if (playing()) { follow = !follow; store.set('read.follow', follow ? '1' : '0'); } else auto = !auto;
+		if (playing()) { follow = !follow; store.set(followKey, follow ? '1' : '0'); } else auto = !auto;
 		run();
 	};
+	// Takes hold of the voice again without the button (a chapter started from one of its verses).
+	wrap._hold = () => { follow = true; auto = false; run(); };
 	const setSpeed = (n) => { speed = Math.max(0, Math.min(AUTO_SPEEDS.length - 1, n)); store.set('read.autoSpeed', String(speed)); show(); };
 	slower.onclick = () => setSpeed(speed - 1);
 	faster.onclick = () => setSpeed(speed + 1);
 	if (player) {
 		// Starting the audio turns auto scroll into following; when it stops, the scrolling stops.
-		player.addEventListener('play', () => { if (auto || store.get('read.follow', '0') === '1') follow = true; auto = false; run(); });
+		player.addEventListener('play', () => { if (auto || store.get(followKey, followDefault) === '1') follow = true; auto = false; run(); });
 		for (const ev of ['pause', 'ended']) player.addEventListener(ev, () => show());
 	}
 	show();

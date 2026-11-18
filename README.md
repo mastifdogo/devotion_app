@@ -43,7 +43,10 @@ Gmail ──(OAuth, read-only)──▶ server ──▶ Claude: email → entri
      Download more voices and every entry is read in each of them; each person
      picks their voice in the app, and the default voice is what they hear
      until they do. There is also a speaking pace, and an OpenAI-compatible
-     speech API can be used instead.
+     speech API can be used instead. The Bible is read aloud too, a chapter at
+     a time when someone presses Listen: by Piper, unless a person picks the
+     speech API as their *Bible voice* in the app's settings (see
+     [Listening to the Bible](#listening-to-the-bible)).
    - **Android app**: shows the address to type into the app, and the people
      who have connected.
    - **Bible versions**: which public-domain translations the server stores
@@ -165,8 +168,7 @@ The server's address opens a start page with two choices: **Continue to
 Devotion** (`/read`), which shows the Daily readings and Lessons tabs, each
 entry's summary and text, and plays its audio in any voice the server has at
 the speed you choose; and **Sign in to the admin panel** (`/admin`). The
-reader needs no sign-in, like the app. Highlights, notes and the Bible are
-in the Android app only.
+reader needs no sign-in, like the app.
 
 The reader asks for your name the first time (the same profiles as the app)
 and has three tabs: **Daily readings**, **Lessons** and **Bible**. The Bible
@@ -202,6 +204,34 @@ Reina-Valera 1909); modern copyrighted translations are not included. Texts
 come from [scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases)
 at a fixed commit and are checked against a pinned checksum.
 
+The app carries the King James Version itself
+(`android/app/src/main/assets/bibles/kjv.json`, written from that same
+download by `node server/scripts/app-bible.js`). The server does not need it
+for reading; it downloads it by itself the first time someone listens to a
+King James chapter.
+
+### Listening to the Bible
+
+In the app and on the website a chapter has **Listen**. The server reads the
+chapter the first time anyone asks for it (a moment with Piper, longer on a
+small container) and keeps the audio; the app keeps what it has played, up to
+about 300 MB.
+
+- **Piper reads the Bible by default**, in the server's default voice, as soon
+  as the server has a Piper voice (the template comes with one). Under
+  **Audio** the owner can hand it to a local speech server or switch it off.
+- **The speech API (OpenAI's, or one like it) never reads the Bible on its
+  own.** When it has a key, each person can choose it in the app under
+  *Settings → Bible voice*; only the chapters that person then listens to are
+  sent to it. *In the app, a person may pick the speech API to read the Bible*
+  under **Audio** takes the choice away. The website always uses the server's
+  own voice.
+- While a chapter plays, **Follow** keeps the verse being read in the middle
+  of the screen, and a verse's number starts the reading from that verse.
+  While nothing plays, **Auto scroll** moves the chapter up at a steady pace
+  (− and + change it), which also works where the Bible is not read aloud.
+  Scrolling by hand lets go; the button takes hold again.
+
 ## The Android app
 
 Install the APK from the release page and type in the server's address (just
@@ -214,9 +244,11 @@ forward its port to the internet.
 
 In an entry, tap a sentence to highlight it or attach a comment. The player
 has a speed setting; Settings also has the theme (system, light, dark), the
-profile, and **Check for updates**. The Bible screen downloads versions from
-the server and opens the entry's scripture reference. The app syncs on start
-and on refresh and works offline with what it has.
+profile, and **Check for updates**. The Bible screen opens the entry's
+scripture reference; the King James Version comes with the app, so the Bible
+works before the app has ever reached a server, and other versions are
+downloaded from the server. The app syncs on start and on refresh and works
+offline with what it has.
 
 ## Updates
 
@@ -284,7 +316,9 @@ No authentication; meant for a home network.
 | `GET /api/profiles/<id>/annotations[?since=]` | That person's highlights and notes. |
 | `PUT /api/profiles/<id>/annotations/<uuid>` | Save one; the later `updated_at` wins. Delete with `"deleted":true`. |
 | `GET` / `PUT /api/profiles/<id>/bibles` | The Bible versions that person has downloaded in the app (`{"bibles":["kjv"]}`; PUT replaces the list). |
-| `GET /api/bibles`, `GET /api/bibles/<id>` | Bible versions on the server, and one version's text. |
+| `GET /api/bibles`, `GET /api/bibles/<id>` | Bible versions on the server (with `audio`: whether chapters are read aloud, and `audio_premium`: the speech API voice a person may ask for), and one version's text. |
+| `GET /api/bibles/<id>/audio/<book>/<chapter>` | The chapter's MP3 (book from 0, chapter from 1), or `202` while it is being made. `?voice=premium` asks for the speech API's voice instead of the server's own. |
+| `GET /api/bibles/<id>/audio/<book>/<chapter>/verses` | When each verse is heard in that MP3: `{"duration":…,"exact":…,"verses":[{"verse":1,"start":0,"end":5.4}]}`; also `202` while it is being made. |
 | `GET /api/wallpapers`, `/api/wallpapers/<id>`, `/api/wallpapers/<id>/thumb` | Wallpapers on the server by topic, a full image, a thumbnail. |
 
 ### Server settings

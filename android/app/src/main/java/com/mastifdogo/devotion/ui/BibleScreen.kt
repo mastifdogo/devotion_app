@@ -191,7 +191,16 @@ private fun BibleVersions(vm: MainViewModel) {
             VersionRow(vm = vm, info = info) {
                 Button(onClick = { vm.openBibleVersion(info.id) }) { Text("Read") }
                 Spacer(modifier = Modifier.width(8.dp))
-                OutlinedButton(onClick = { vm.deleteBible(info) }) { Text("Delete") }
+                if (vm.isBundledBible(info)) {
+                    // The version that comes with the app is always there.
+                    Text(
+                        text = "Included with the app",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    OutlinedButton(onClick = { vm.deleteBible(info) }) { Text("Delete") }
+                }
             }
         }
 
@@ -209,7 +218,8 @@ private fun BibleVersions(vm: MainViewModel) {
                 Text(if (vm.serverBiblesLoading) "Loading…" else "Refresh")
             }
         }
-        val downloadedIds = downloaded.map { it.id }.toSet()
+        val downloadedIds = downloaded.filter { !vm.isBundledBible(it) }.map { it.id }.toSet()
+        val bundledIds = downloaded.filter { vm.isBundledBible(it) }.map { it.id }.toSet()
         val available = vm.serverBibles
         if (!vm.isServerConfigured) {
             Text(
@@ -242,6 +252,11 @@ private fun BibleVersions(vm: MainViewModel) {
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(onClick = { vm.downloadBible(info) }) { Text("Download again") }
                     }
+                    info.id in bundledIds -> Text(
+                        text = "Included with the app",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                     else -> Button(onClick = { vm.downloadBible(info) }) { Text("Download") }
                 }
             }
@@ -362,9 +377,21 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
 
     val audioTitle = BibleAudioLogic.chapterTitle(book?.name ?: "", vm.bibleChapter + 1)
     val versionName = bible.name.ifBlank { bible.id }
-    // Keeping the verse being read in view: on for each chapter until a drag lets go of it;
-    // the Follow button in the audio bar takes hold again.
+    // The scroll button of the audio bar, as in an entry. While this chapter's audio plays it is
+    // "Follow": the verse being read is kept in view (on for each chapter until a drag lets go of
+    // it; the button takes hold again). While nothing plays it is "Auto scroll": the chapter moves
+    // up at a steady, adjustable pace until its end, a drag, or the button again.
     var followVerse by remember(bible.id, vm.bibleBook, vm.bibleChapter) { mutableStateOf(true) }
+    var autoScrolling by remember(bible.id, vm.bibleBook, vm.bibleChapter) { mutableStateOf(false) }
+    val chapterRef = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1)
+    val playingHere = vm.playerBibleRef == chapterRef && vm.isPlaying
+    LaunchedEffect(playingHere, chapterRef) {
+        // The audio started while the chapter was scrolling by itself: auto scroll becomes Follow.
+        if (playingHere && autoScrolling) {
+            autoScrolling = false
+            followVerse = true
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // A fresh scroll position (top) for every chapter.
@@ -377,17 +404,24 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
                 audioTitle = audioTitle,
                 versionName = versionName,
                 followVerse = followVerse,
-                onLetGo = { followVerse = false },
+                autoScrolling = autoScrolling,
+                onAutoScrollEnd = { autoScrolling = false },
+                onLetGo = {
+                    followVerse = false
+                    autoScrolling = false
+                },
             )
         }
         if (book != null && verses.isNotEmpty()) {
             ChapterAudioBar(
                 vm = vm,
-                ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1),
+                ref = chapterRef,
                 title = audioTitle,
                 versionName = versionName,
                 followVerse = followVerse,
                 onToggleFollow = { followVerse = !followVerse },
+                autoScrolling = autoScrolling,
+                onToggleAuto = { autoScrolling = !autoScrolling },
             )
         }
         val hasWallpaper = vm.appWallpaper != null
@@ -414,10 +448,12 @@ private fun BibleReader(vm: MainViewModel, bible: Bible) {
 }
 
 /**
- * Listen to the chapter: shown when the server can read chapters aloud (or this one is already on
- * the phone). Listen asks the server, which may still have to make the audio ("Preparing…", with
- * Cancel), downloads it and plays it through the same player as entries; errors offer Retry.
- * Like the entry's bar, the speed, slider and −15/+15 show only while it is playing.
+ * The chapter's bar, like an entry's. While nothing plays: "− Auto scroll +", and below it Listen
+ * when the server can read chapters aloud (or this one is already on the phone). Listen asks the
+ * server, which may still have to make the audio ("Preparing…", with Cancel), downloads it and
+ * plays it through the same player as entries; errors offer Retry. While it plays: Follow, the
+ * speed, the slider and −15/+15. Next to the version it says when the speech service's voice
+ * reads (the user's choice in Settings); otherwise the server's own voice does.
  */
 @Composable
 private fun ChapterAudioBar(
@@ -427,11 +463,15 @@ private fun ChapterAudioBar(
     versionName: String,
     followVerse: Boolean,
     onToggleFollow: () -> Unit,
+    autoScrolling: Boolean,
+    onToggleAuto: () -> Unit,
 ) {
     val loadedHere = vm.playerBibleRef == ref
-    if (!vm.bibleAudioAvailable && !vm.isChapterAudioCached(ref) && !loadedHere) return
+    val canListen = vm.bibleAudioAvailable || vm.isChapterAudioCached(ref) || loadedHere
     val playingHere = loadedHere && vm.isPlaying
     val play = { vm.playChapter(ref, title, versionName) }
+    val premiumName = vm.biblePremiumName
+    val voiceText = if (vm.biblePremium && premiumName != null) "$versionName \u00b7 $premiumName" else versionName
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     Column(
         modifier = Modifier
@@ -439,6 +479,9 @@ private fun ChapterAudioBar(
             .animateContentSize()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+        // Not playing: the chapter can scroll by itself. Without listening that is all the bar holds.
+        if (!playingHere) AutoScrollControl(vm, selected = autoScrolling, onClick = onToggleAuto)
+        if (!canListen) return@Column
         val error = vm.chapterAudioError?.takeIf { it.first == ref }?.second
         when {
             vm.preparingChapter == ref -> Row(
@@ -462,7 +505,7 @@ private fun ChapterAudioBar(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = versionName,
+                        text = voiceText,
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -498,7 +541,7 @@ private fun ChapterAudioBar(
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = versionName,
+                        text = voiceText,
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -524,6 +567,8 @@ private fun ChapterText(
     audioTitle: String,
     versionName: String,
     followVerse: Boolean,
+    autoScrolling: Boolean,
+    onAutoScrollEnd: () -> Unit,
     onLetGo: () -> Unit,
 ) {
     val ref = BibleRef(bible.id, vm.bibleBook, vm.bibleChapter + 1)
@@ -559,7 +604,8 @@ private fun ChapterText(
     val viewportHeight = remember { IntArray(1) }
     val minGlide = with(density) { 6.dp.toPx() }
 
-    // A drag by hand lets go of the verse being read (our own scrolling emits no interaction).
+    // A drag by hand lets go of the verse being read and stops the auto scroll (our own scrolling
+    // emits no interaction).
     val letGo by rememberUpdatedState(onLetGo)
     LaunchedEffect(scroll) {
         scroll.interactionSource.interactions.collect { interaction ->
@@ -597,8 +643,29 @@ private fun ChapterText(
             }
         }
     }
-    // Keep the screen on only while it is playing and following along.
-    val keepScreenOn = followVerse && playingHere && vm.chapterTimings != null
+    // Auto scroll: a constant speed, every frame, from wherever the reader is to the chapter's end.
+    val autoScrollEnd by rememberUpdatedState(onAutoScrollEnd)
+    LaunchedEffect(autoScrolling, playingHere, ref) {
+        if (!autoScrolling || playingHere) return@LaunchedEffect
+        var previousFrame = 0L
+        var carry = 0f
+        while (true) {
+            val now = withFrameNanos { it }
+            val seconds = FollowLogic.frameSeconds(previousFrame, now)
+            previousFrame = now
+            if (FollowLogic.reachedEnd(scroll.value, scroll.maxValue)) {
+                // At the bottom: it switches itself off.
+                autoScrollEnd()
+                break
+            }
+            val speed = with(density) { vm.autoScrollSpeed.dp.toPx() }
+            val step = FollowLogic.step(carry, FollowLogic.autoDelta(speed, seconds))
+            carry = step.carry
+            if (step.pixels != 0) scroll.dispatchRawDelta(step.pixels.toFloat())
+        }
+    }
+    // Keep the screen on only while the text is moving by itself: following the voice, or auto scrolling.
+    val keepScreenOn = (followVerse && playingHere && vm.chapterTimings != null) || (autoScrolling && !playingHere)
     val view = LocalView.current
     DisposableEffect(keepScreenOn) {
         if (keepScreenOn) view.keepScreenOn = true

@@ -166,12 +166,21 @@ class ApiClient {
      * One GET /api/bibles/{version}/audio/{book}/{chapter} ([book] 0-based, [chapter] 1-based).
      * On 200 the MP3 is written to [dest]; any other code (202 = still being made, 404, 502, 503)
      * is returned with the server's {"error": …} text, for BibleAudioLogic.nextStep to decide.
+     * The server's own voice reads unless [premium] asks for the speech service's (?voice=premium).
      */
-    fun fetchChapterAudio(baseUrl: String, version: String, book: Int, chapter: Int, dest: File): ChapterAudioAnswer {
+    fun fetchChapterAudio(
+        baseUrl: String,
+        version: String,
+        book: Int,
+        chapter: Int,
+        dest: File,
+        premium: Boolean = false,
+    ): ChapterAudioAnswer {
         val url = apiUrl(baseUrl)
             .addPathSegments("api/bibles")
             .addPathSegment(version)
             .addPathSegments("audio/$book/$chapter")
+            .apply { if (premium) addQueryParameter("voice", "premium") }
             .build()
         val request = Request.Builder().url(url).build()
         client.newCall(request).execute().use { response ->
@@ -196,13 +205,20 @@ class ApiClient {
     /**
      * One GET /api/bibles/{version}/audio/{book}/{chapter}/verses. 200 carries the verse times
      * (and means the MP3 is ready); 202 = still being made; 404 = no Bible audio, or a server
-     * that has no verse times yet.
+     * that has no verse times yet. [premium] as in [fetchChapterAudio].
      */
-    fun fetchChapterVerses(baseUrl: String, version: String, book: Int, chapter: Int): ChapterVersesAnswer {
+    fun fetchChapterVerses(
+        baseUrl: String,
+        version: String,
+        book: Int,
+        chapter: Int,
+        premium: Boolean = false,
+    ): ChapterVersesAnswer {
         val url = apiUrl(baseUrl)
             .addPathSegments("api/bibles")
             .addPathSegment(version)
             .addPathSegments("audio/$book/$chapter/verses")
+            .apply { if (premium) addQueryParameter("voice", "premium") }
             .build()
         val request = Request.Builder().url(url).header("Accept", "application/json").build()
         client.newCall(request).execute().use { response ->

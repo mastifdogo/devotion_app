@@ -150,9 +150,10 @@ section.off { display:none; }
 	<div class="grid">
 		<div><label for="readings_engine">Daily readings are read by</label><select id="readings_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">No audio</option></select></div>
 		<div><label for="lessons_engine">Lessons are read by</label><select id="lessons_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">No audio</option></select></div>
-		<div><label for="bible_engine">The Bible is read by</label><select id="bible_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="openai">Speech API (internet)</option><option value="local">Local speech server</option><option value="none">Off (no listening in the Bible)</option></select></div>
+		<div><label for="bible_engine">The Bible is read by</label><select id="bible_engine" data-setting data-engine><option value="piper">Piper (this server)</option><option value="local">Local speech server</option><option value="none">Off (no listening in the Bible)</option></select></div>
+		<div><label for="bible_premium">In the app, a person may pick the speech API to read the Bible</label><select id="bible_premium" data-setting><option value="on">Yes, when it has a key</option><option value="off">No</option></select></div>
 	</div>
-	<p class="small muted">Entries are read when they arrive. A Bible chapter is read the first time someone presses Listen on it (that first time takes a moment, longer with Piper on a small server) and is kept on the server after that. <span id="bible-audio-kept"></span> <button class="plain small" id="bible-audio-clear" hidden>Remove the kept Bible audio</button></p>
+	<p class="small muted">Entries are read when they arrive. A Bible chapter is read the first time someone presses Listen on it (that first time takes a moment, longer with Piper on a small server) and is kept on the server after that. The speech API never reads the Bible by itself: only for a person who picks it as their Bible voice in the app's settings, chapter by chapter as they listen. The app carries the King James Version; this server downloads it the first time someone listens to it. <span id="bible-audio-kept"></span> <button class="plain small" id="bible-audio-clear" hidden>Remove the kept Bible audio</button></p>
 	<label for="tts_rate">Speaking pace</label>
 	<select id="tts_rate" data-setting style="max-width:14rem">
 		<option value="slow">Slower</option><option value="normal">Normal</option><option value="fast">Faster</option>
@@ -334,6 +335,8 @@ const usesAudio = () => [state.engines?.readings_engine, state.engines?.lessons_
 function showEngine() {
 	// Each engine's settings show while something is read by it.
 	const used = new Set([...document.querySelectorAll('[data-engine]')].map((e) => e.value));
+	// The speech API's key is also what lets a person pick it for the Bible in the app.
+	if ($('bible_premium').value === 'on' && $('bible_engine').value !== 'none') used.add('openai');
 	for (const d of document.querySelectorAll('[data-for]')) d.hidden = !used.has(d.dataset.for);
 }
 
@@ -496,7 +499,7 @@ $('password-form').onsubmit = act(async () => {
 	$('pw-current').value = $('pw-new').value = ''; toast('Password changed.');
 });
 $('logout').onclick = act(async () => { await api('/admin/api/logout', {}); showLogin(); });
-for (const e of document.querySelectorAll('[data-engine]')) e.onchange = showEngine;
+for (const e of document.querySelectorAll('[data-engine], #bible_premium')) e.onchange = showEngine;
 $('bible-audio-clear').onclick = act(async () => { state = await api('/admin/api/bible-audio/clear', {}); render(); toast('Removed. Chapters are read again when someone listens.'); });
 $('theme').value = document.documentElement.dataset.theme || 'auto';
 $('theme').onchange = () => {

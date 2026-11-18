@@ -404,23 +404,29 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	});
 
 	// Bible versions stored on this server, for the app to download.
-	// "audio" says whether chapters can be listened to (see the audio route below).
-	route('GET', /^\/api\/bibles$/, (req, res) => send(res, 200, { bibles: bibles.installed(), audio: Boolean(bibleAudio?.enabled()) }));
+	// "audio" says whether chapters can be listened to (see the audio route below); "audio_premium" names the
+	// speech API voice a person may ask for instead of the server's own (see ?voice=premium), when there is one.
+	route('GET', /^\/api\/bibles$/, (req, res) => {
+		const premium = bibleAudio?.premium() ?? null;
+		send(res, 200, { bibles: bibles.installed(), audio: Boolean(bibleAudio?.enabled()), ...(premium ? { audio_premium: premium } : {}) });
+	});
 
 	// A chapter read aloud (book from 0, chapter from 1): the MP3 once it exists; until then
 	// 202 while it is being made, which the first request starts.
 	// When each verse is heard in that MP3 (seconds): { duration, exact, verses: [{ verse, start, end }] }.
 	// Also answers 202 while the chapter is being made, and starts it.
-	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})\/verses$/, async (req, res, m) => {
+	// The server's own voice reads (Piper unless the owner chose otherwise); ?voice=premium asks for the
+	// speech API's voice instead, which the app sends only for a person who chose it there.
+	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})\/verses$/, async (req, res, m, url) => {
 		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
-		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]));
+		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]), { premium: url.searchParams.get('voice') === 'premium' });
 		if (got.state !== 'ready') return send(res, 202, { status: 'making' }, { 'retry-after': '3' });
 		send(res, 200, got.info);
 	});
 
-	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})$/, async (req, res, m) => {
+	route('GET', /^\/api\/bibles\/([a-z0-9]+)\/audio\/(\d{1,3})\/(\d{1,3})$/, async (req, res, m, url) => {
 		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
-		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]));
+		const got = await bibleAudio.get(m[1], Number(m[2]), Number(m[3]), { premium: url.searchParams.get('voice') === 'premium' });
 		if (got.state !== 'ready') return send(res, 202, { status: 'making' }, { 'retry-after': '3' });
 		sendAudio(req, res, got.file, got.bytes, got.etag);
 	});
