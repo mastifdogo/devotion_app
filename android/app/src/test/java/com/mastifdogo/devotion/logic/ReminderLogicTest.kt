@@ -12,8 +12,9 @@ class ReminderLogicTest {
         Entry(id = id, title = title, entryDate = date, createdAt = "2026-11-01T10:00:00.000Z", kind = kind, archived = archived, deleted = deleted)
 
     private val entries = listOf(
-        entry(1, "2026-11-14"),
-        entry(2, "2026-11-15", kind = "lesson", title = " The Good Shepherd "),
+        entry(1, "2026-11-13"),
+        entry(2, "2026-11-14", title = " The Good Shepherd "),
+        entry(5, "2026-11-15", kind = "lesson"),
         entry(3, "2026-11-16", archived = true),
         entry(4, "2026-11-17", deleted = true),
     )
@@ -39,8 +40,11 @@ class ReminderLogicTest {
     }
 
     @Test
-    fun latestEntry_isTheNewestLiveOneAcrossKinds() {
+    fun latestEntry_isTheNewestLiveReadingNotALesson() {
         assertEquals(2L, ReminderLogic.latestEntry(entries)?.id)
+        assertNull(ReminderLogic.latestEntry(listOf(entry(5, "2026-11-15", kind = "lesson"))))
+        // Devotions (any other kind) are in the Daily readings tab and count.
+        assertEquals(7L, ReminderLogic.latestEntry(entries + entry(7, "2026-11-16", kind = "devotion"))?.id)
         assertNull(ReminderLogic.latestEntry(emptyList()))
         assertNull(ReminderLogic.latestEntry(listOf(entry(3, "2026-11-16", archived = true))))
     }
@@ -51,7 +55,9 @@ class ReminderLogicTest {
         assertEquals(ReminderDecision.Notify(2, "The Good Shepherd"), ReminderLogic.decide(true, entries, emptySet(), noon, 21 * 60, 7 * 60))
         // Older entries being read does not matter.
         assertEquals(ReminderDecision.Notify(2, "The Good Shepherd"), ReminderLogic.decide(true, entries, setOf(1L), noon, 21 * 60, 7 * 60))
-        // Read: cancel, also during quiet hours.
+        // Nor does the newer lesson being read: the daily reading is still waiting.
+        assertEquals(ReminderDecision.Notify(2, "The Good Shepherd"), ReminderLogic.decide(true, entries, setOf(5L), noon, 21 * 60, 7 * 60))
+        // Read: cancel, also during quiet hours (the newer lesson being unread does not matter).
         assertEquals(ReminderDecision.Cancel, ReminderLogic.decide(true, entries, setOf(2L), noon, 21 * 60, 7 * 60))
         assertEquals(ReminderDecision.Cancel, ReminderLogic.decide(true, entries, setOf(2L), 23 * 60, 21 * 60, 7 * 60))
         // Quiet hours: nothing is posted.

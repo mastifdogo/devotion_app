@@ -34,14 +34,16 @@ object ReminderLogic {
     const val DEFAULT_QUIET_UNTIL = 7 * 60
 
     /**
-     * The latest entry: the newest by the lists' order (entry_date, falling back to created_at)
-     * across daily readings and lessons, not archived or deleted. Null when there is none.
+     * The latest reading: the newest by the lists' order (entry_date, falling back to created_at)
+     * of the Daily readings tab, not archived or deleted. Lessons do not count, so a newer lesson
+     * (read or not) never stands in for the daily reading. Null when there is none.
      */
     fun latestEntry(entries: List<Entry>): Entry? =
-        entries.filter { !it.archived && !it.deleted }.sortedNewestFirst().firstOrNull()
+        entries.filter { !it.archived && !it.deleted && EntryKinds.kindOf(it) != EntryKinds.LESSON }
+            .sortedNewestFirst().firstOrNull()
 
     /**
-     * Should a reminder fire now? Off, no entries or the latest one read -> Cancel; unread but in
+     * Should a reminder fire now? Off, no readings or the latest one read -> Cancel; unread but in
      * the quiet hours -> Quiet; otherwise Notify.
      */
     fun decide(

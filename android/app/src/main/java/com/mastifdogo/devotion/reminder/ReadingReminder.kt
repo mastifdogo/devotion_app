@@ -24,8 +24,9 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The "Today's reading is waiting" reminder: about every 15 minutes (WorkManager's minimum), while
- * the latest entry is unread and it is not quiet hours, one notification that is replaced rather
- * than stacked, and removed as soon as the entry is read. It needs no network: it looks at the
+ * the latest daily reading is unread and it is not quiet hours, one notification that is replaced
+ * rather than stacked, and removed as soon as the reading is read. Lessons are not readings here: a
+ * newer lesson, read or not, changes nothing. It needs no network: it looks at the
  * entries and read marks cached on the phone.
  */
 object ReadingReminder {
