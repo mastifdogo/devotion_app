@@ -226,6 +226,12 @@ about 300 MB.
   sent to it. *In the app, a person may pick the speech API to read the Bible*
   under **Audio** takes the choice away. The website always uses the server's
   own voice.
+- **Read the whole Bible with Piper** (under **Audio**): pick a version and
+  press *Read it all now*, and the server reads every chapter ahead of time, in
+  the voice the Bible is read in, so nobody waits for a chapter. That is many
+  hours of work (days on a small container) and roughly 2 GB of disk for a
+  whole Bible. It shows how far it is, carries on after a restart, skips
+  chapters it already has, and can be stopped at any time.
 - While a chapter plays, **Follow** keeps the verse being read in the middle
   of the screen, and a verse's number starts the reading from that verse.
   While nothing plays, **Auto scroll** moves the chapter up at a steady pace
@@ -249,6 +255,16 @@ scripture reference; the King James Version comes with the app, so the Bible
 works before the app has ever reached a server, and other versions are
 downloaded from the server. The app syncs on start and on refresh and works
 offline with what it has.
+
+**Autoplay** (Settings → Playback speed, on by default): when a reading or
+lesson has been heard to the end, the app plays the latest unread daily
+reading; when all daily readings are read, the latest unread lesson; and when
+those are read too, the Bible, one chapter after another in the version the
+Bible tab was last open in. The app remembers the chapter autoplay reached
+(per person, on the phone), so listening this way works through the whole
+Bible; a chapter stopped part-way is taken up again at the verse it was in.
+Chapters played by hand in the Bible tab do not move that place. Settings
+shows it, with *Start over*.
 
 ## Updates
 

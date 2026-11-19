@@ -21,6 +21,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_DOWNLOAD, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_DOWNLOAD, value).apply()
 
+    /** When an entry has been heard to the end, play the next unread one, then the Bible. */
+    var autoplay: Boolean
+        get() = prefs.getBoolean(KEY_AUTOPLAY, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTOPLAY, value).apply()
+
     /** "system", "light" or "dark". */
     var themeMode: String
         get() = prefs.getString(KEY_THEME_MODE, "system") ?: "system"
@@ -243,6 +248,7 @@ class SettingsStore(context: Context) {
         const val KEY_SERVER_URL = "server_url"
         const val KEY_GITHUB_TOKEN = "github_token"
         const val KEY_AUTO_DOWNLOAD = "auto_download_audio"
+        const val KEY_AUTOPLAY = "autoplay"
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_PLAYBACK_SPEED = "playback_speed"
         const val KEY_PROFILE_ID = "profile_id_"

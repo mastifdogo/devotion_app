@@ -800,6 +800,35 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 404);
 	await call('/admin/api/settings', { body: { bible_premium: 'on' } });
 
+	// "Read the whole Bible with Piper": every chapter of a version ahead of time, started by hand.
+	await call('/admin/api/settings', { body: { bible_engine: 'local' } });
+	assert.equal((await call('/admin/api/bible-audio/read-all', { body: { version: 'tst' } })).status, 400); // not read by Piper
+	await call('/admin/api/settings', { body: { bible_engine: 'piper' } });
+	assert.equal((await call('/admin/api/bible-audio/read-all', { body: { version: 'nope' } })).status, 404);
+	assert.equal((await call('/admin/api/bible-audio/read-all', { body: {} })).status, 400);
+	state = await (await call('/admin/api/bible-audio/clear', { body: {} })).json();
+	const piperRuns = () => calls.run.filter((c) => c.cmd === 'piper').length;
+	const before = piperRuns();
+	const started = await call('/admin/api/bible-audio/read-all', { body: { version: 'tst' } });
+	assert.equal(started.status, 202);
+	state = await started.json();
+	assert.deepEqual([state.bible_read_all.version, state.bible_read_all.running, settings.get('bible_read_all')], ['tst', true, 'tst']);
+	assert.equal((await call('/admin/api/bible-audio/read-all', { body: { version: 'tst' } })).status, 409); // one at a time
+	for (let i = 0; i < 200 && state.bible_read_all.running; i++) { await new Promise((r) => setTimeout(r, 10)); state = await (await call('/admin/api/state')).json(); }
+	const total = state.bible_read_all.total;
+	assert.ok(total >= 2);
+	assert.deepEqual(state.bible_read_all, { version: 'tst', name: state.bible_read_all.name, done: total, total, failed: 0, running: false, note: 'Finished.' });
+	assert.deepEqual([state.bible_audio.files, piperRuns() - before, settings.get('bible_read_all')], [total, total, '']);
+	assert.equal((await call('/api/bibles/tst/audio/0/2')).status, 200); // there at once for a listener
+	// Started again, the chapters already kept are not read again.
+	state = await (await call('/admin/api/bible-audio/read-all', { body: { version: 'tst' } })).json();
+	for (let i = 0; i < 200 && state.bible_read_all.running; i++) { await new Promise((r) => setTimeout(r, 10)); state = await (await call('/admin/api/state')).json(); }
+	assert.deepEqual([state.bible_read_all.done, piperRuns() - before], [total, total]);
+	// Stopping is remembered, so a restart does not take it up again.
+	settings.set('bible_read_all', 'tst');
+	state = await (await call('/admin/api/bible-audio/read-all/stop', { body: {} })).json();
+	assert.equal(settings.get('bible_read_all'), '');
+
 	state = await (await call('/admin/api/bible-audio/clear', { body: {} })).json();
 	assert.deepEqual(state.bible_audio, { files: 0, bytes: 0 });
 	await call('/admin/api/settings', { body: { bible_engine: 'none' } });

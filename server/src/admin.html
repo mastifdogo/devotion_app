@@ -154,6 +154,11 @@ section.off { display:none; }
 		<div><label for="bible_premium">In the app, a person may pick the speech API to read the Bible</label><select id="bible_premium" data-setting><option value="on">Yes, when it has a key</option><option value="off">No</option></select></div>
 	</div>
 	<p class="small muted">Entries are read when they arrive. A Bible chapter is read the first time someone presses Listen on it (that first time takes a moment, longer with Piper on a small server) and is kept on the server after that. The speech API never reads the Bible by itself: only for a person who picks it as their Bible voice in the app's settings, chapter by chapter as they listen. The app carries the King James Version; this server downloads it the first time someone listens to it. <span id="bible-audio-kept"></span> <button class="plain small" id="bible-audio-clear" hidden>Remove the kept Bible audio</button></p>
+	<div id="read-all">
+		<label for="read-all-version">Read the whole Bible with Piper</label>
+		<div class="row"><select id="read-all-version" style="max-width:22rem"></select> <button class="plain" id="read-all-start">Read it all now</button> <button class="plain" id="read-all-stop" hidden>Stop</button></div>
+		<p class="small muted">Reads every chapter of that version ahead of time, in the voice the Bible is read in, so nobody waits for a chapter. It takes many hours (days on a small server) and roughly 2 GB of disk for a whole Bible; entries and chapters people ask for take their turn in between. It carries on after a restart, skips chapters already kept, and can be stopped at any time. A version the server does not have yet is downloaded first. <span id="read-all-status"></span></p>
+	</div>
 	<label for="tts_rate">Speaking pace</label>
 	<select id="tts_rate" data-setting style="max-width:14rem">
 		<option value="slow">Slower</option><option value="normal">Normal</option><option value="fast">Faster</option>
@@ -426,6 +431,20 @@ function render() {
 	const ba = state.bible_audio;
 	$('bible-audio-kept').textContent = ba && ba.files ? `${ba.files} chapter${ba.files === 1 ? '' : 's'} kept (${(ba.bytes / 1048576).toFixed(1)} MB).` : '';
 	$('bible-audio-clear').hidden = !(ba && ba.files);
+	const ra = state.bible_read_all, rv = $('read-all-version');
+	$('read-all').hidden = state.engines?.bible_engine !== 'piper';
+	if (document.activeElement !== rv) {
+		const chosen = ra && ra.running ? ra.version : rv.value;
+		rv.replaceChildren();
+		for (const b of [...state.bibles].sort((x, y) => y.installed - x.installed)) { const o = el('option', b.name + (b.installed ? '' : ' (downloaded first)')); o.value = b.id; rv.append(o); }
+		if (chosen && [...rv.options].some((o) => o.value === chosen)) rv.value = chosen;
+	}
+	rv.disabled = Boolean(ra && ra.running);
+	$('read-all-start').hidden = Boolean(ra && ra.running);
+	$('read-all-stop').hidden = !(ra && ra.running);
+	$('read-all-status').textContent = !ra ? '' : ra.running
+		? `Reading the ${ra.name}: ${ra.total ? `${ra.done} of ${ra.total} chapters` : 'getting ready'}${ra.failed ? `, ${ra.failed} failed` : ''}…`
+		: `${ra.name}: ${ra.done} of ${ra.total} chapters. ${ra.note}`;
 
 	const k = state.backup, ks = $('backup-status');
 	if (k) {
@@ -500,6 +519,8 @@ $('password-form').onsubmit = act(async () => {
 });
 $('logout').onclick = act(async () => { await api('/admin/api/logout', {}); showLogin(); });
 for (const e of document.querySelectorAll('[data-engine], #bible_premium')) e.onchange = showEngine;
+$('read-all-start').onclick = act(async () => { state = await api('/admin/api/bible-audio/read-all', { version: $('read-all-version').value }); render(); toast('Started. This page shows how far it is.'); });
+$('read-all-stop').onclick = act(async () => { state = await api('/admin/api/bible-audio/read-all/stop', {}); render(); });
 $('bible-audio-clear').onclick = act(async () => { state = await api('/admin/api/bible-audio/clear', {}); render(); toast('Removed. Chapters are read again when someone listens.'); });
 $('theme').value = document.documentElement.dataset.theme || 'auto';
 $('theme').onchange = () => {

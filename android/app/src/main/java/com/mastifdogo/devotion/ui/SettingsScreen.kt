@@ -451,6 +451,33 @@ private fun PlaybackSection(vm: MainViewModel) {
             Spacer(modifier = Modifier.width(8.dp))
         }
     }
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Autoplay", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = "When a reading or lesson ends, play the latest unread daily reading, then the latest " +
+                    "unread lesson, then the Bible from where autoplay left it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = vm.autoplay, onCheckedChange = { vm.updateAutoplay(it) })
+    }
+    val place = vm.biblePlace
+    if (place != null) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "In the Bible, autoplay ${if (place.finished) "has read" else "is in"} " +
+                    "${place.title.ifBlank { "book ${place.book + 1}, chapter ${place.chapter}" }}.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { vm.resetBiblePlace() }) { Text("Start over") }
+        }
+    }
 }
 
 /** The app wallpaper: current one, text window opacity, remove; the row opens the Wallpapers screen. */

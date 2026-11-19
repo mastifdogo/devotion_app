@@ -51,12 +51,15 @@ server.listen(config.port, config.host, () => {
 	console.log(`devotion-server ${config.version} listening on http://${config.host}:${config.port} (data: ${config.dataDir})`);
 	pipeline.start();
 	backups.start();
+	// The whole Bible was being read when the server stopped: carry on.
+	bibleAudio.resumeReadAll();
 });
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
 	process.on(signal, () => {
 		pipeline.stop();
 		backups.stop();
+		bibleAudio.interruptReadAll();
 		server.close(() => {
 			db.close();
 			process.exit(0);

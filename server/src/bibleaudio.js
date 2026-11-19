@@ -1,6 +1,7 @@
 // The Bible read aloud: one MP3 per chapter, version and voice, made the first
 // time someone asks to listen and kept on the server after that. A whole
-// Bible is over a thousand chapters, so nothing is made ahead of time.
+// Bible is over a thousand chapters, so nothing is made ahead of time unless
+// the owner starts it on the admin page ("Read the whole Bible with Piper").
 import { createHash } from 'node:crypto';
 import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -47,6 +48,7 @@ export class BibleAudio {
 		this.making = new Map(); // file name -> promise
 		this.failed = new Map(); // file name -> message, until asked again
 		this.loaded = null; // the version read last, kept in memory: chapters are asked for one after another
+		this.all = null; // reading a whole version ahead of time: { version, name, done, total, failed, running, note }
 	}
 
 	enabled() {
@@ -132,7 +134,88 @@ export class BibleAudio {
 				.finally(() => this.making.delete(name));
 			this.making.set(name, job);
 		}
-		return { state: 'making' };
+		return { state: 'making', job: this.making.get(name) };
+	}
+
+	// --- The whole Bible, ahead of time -----------------------------------------
+	// Started by hand on the admin page: every chapter of one version is read by Piper,
+	// in the voice a listener gets, so nobody waits for a chapter afterwards. It is
+	// hours of work; what is being read is remembered in the settings, so it carries on
+	// after a restart, and chapters already kept are not read again.
+
+	/** For the admin page: null when nothing was started, else { version, name, done, total, failed, running, note }. */
+	readAllView() {
+		if (!this.all) return null;
+		const { version, name, done, total, failed, running, note } = this.all;
+		return { version, name, done, total, failed, running, note };
+	}
+
+	/** Starts reading every chapter of a version (downloading the version first when the server does not have it). */
+	startReadAll(versionId) {
+		if (this.all?.running) throw new BibleAudioError('The whole Bible is already being read; stop that first.', 409);
+		if (!this.bibles.catalog.some((c) => c.id === versionId) && !this.bibles.get(versionId)) throw new BibleAudioError('No such Bible version.', 404);
+		if (this.tts.engineFor('bible') !== 'piper' || !this.tts.bibleVoiceId()) throw new BibleAudioError('The Bible is not read by Piper on this server. Choose Piper under "The Bible is read by" and save first.', 400);
+		const all = { version: versionId, name: this.bibles.get(versionId)?.name ?? this.bibles.catalog.find((c) => c.id === versionId)?.name ?? versionId, done: 0, total: 0, failed: 0, running: true, note: '' };
+		this.all = all;
+		this.settings.set('bible_read_all', versionId);
+		all.job = this.readAll(all)
+			.catch((err) => { all.note = err.message; this.log.error(`bible audio, whole Bible: ${err.message}`); })
+			.finally(() => {
+				all.running = false;
+				// Stopped by hand or finished: not taken up again at the next start. (A newer run has its own record.)
+				if (this.all === all && !all.interrupted) this.settings.set('bible_read_all', '');
+			});
+		return this.readAllView();
+	}
+
+	/** Stops after the chapters being read now. */
+	stopReadAll() {
+		if (this.all?.running) { this.all.stopped = true; this.all.note = 'Stopped.'; }
+		this.settings.set('bible_read_all', '');
+		return this.readAllView();
+	}
+
+	/** At startup: carries on with what was being read when the server stopped. */
+	resumeReadAll() {
+		const id = this.settings.get('bible_read_all');
+		if (!id || this.all?.running) return;
+		try { this.startReadAll(id); } catch (err) { this.log.error(`bible audio, whole Bible: ${err.message}`); this.settings.set('bible_read_all', ''); }
+	}
+
+	/** When the server shuts down: the work stops, and is taken up again at the next start. */
+	interruptReadAll() {
+		if (this.all?.running) { this.all.interrupted = true; this.all.stopped = true; }
+	}
+
+	async readAll(all) {
+		if (!this.bibles.get(all.version)) await this.bibles.install(all.version);
+		const bible = await this.version(all.version);
+		const chapters = [];
+		bible.books.forEach((book, b) => book.chapters.forEach((verses, c) => { if (chapterParts(book.name, c + 1, verses).length) chapters.push([b, c + 1]); }));
+		all.total = chapters.length;
+		let next = 0, failedInARow = 0;
+		const worker = async () => {
+			while (!all.stopped && next < chapters.length) {
+				const [book, chapter] = chapters[next++];
+				// The owner handed the Bible to something else meanwhile: Piper stops here.
+				if (this.tts.engineFor('bible') !== 'piper') { all.stopped = true; all.note = 'Stopped: the Bible is no longer read by Piper.'; return; }
+				try {
+					let got = await this.get(all.version, book, chapter);
+					if (got.state !== 'ready') { await got.job; got = await this.get(all.version, book, chapter); }
+					if (got.state !== 'ready') throw new BibleAudioError('The chapter was not made.', 502);
+					all.done++;
+					failedInARow = 0;
+				} catch (err) {
+					all.failed++;
+					all.note = `${bible.books[book].name} ${chapter}: ${err.message}`;
+					// Piper missing, no memory, a full disk: every chapter would fail the same way.
+					if (++failedInARow >= 3) { all.stopped = true; all.note = `Stopped after three chapters in a row failed. The last: ${all.note}`; }
+				}
+			}
+		};
+		// As many at once as the machine has room for (the voice engine's own limit still holds).
+		await Promise.all(Array.from({ length: this.tts.jobs() }, worker));
+		if (!all.stopped) all.note = all.failed ? `Finished; ${all.failed} chapter${all.failed === 1 ? '' : 's'} could not be read. The last: ${all.note}` : 'Finished.';
 	}
 
 	/** What is kept: { files, bytes }. */

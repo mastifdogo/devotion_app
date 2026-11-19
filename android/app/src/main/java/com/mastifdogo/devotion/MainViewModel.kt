@@ -32,6 +32,7 @@ import com.mastifdogo.devotion.data.ApiException
 import com.mastifdogo.devotion.data.Bible
 import com.mastifdogo.devotion.data.BibleAudioStore
 import com.mastifdogo.devotion.data.BibleInfo
+import com.mastifdogo.devotion.data.BibleProgressStore
 import com.mastifdogo.devotion.data.BibleStore
 import com.mastifdogo.devotion.data.BiblesResponse
 import com.mastifdogo.devotion.data.Entry
@@ -47,7 +48,9 @@ import com.mastifdogo.devotion.data.WallpaperStore
 import com.mastifdogo.devotion.data.VoicesResponse
 import com.mastifdogo.devotion.logic.AudioLogic
 import com.mastifdogo.devotion.logic.AutoSync
+import com.mastifdogo.devotion.logic.AutoplayLogic
 import com.mastifdogo.devotion.logic.BibleAudioLogic
+import com.mastifdogo.devotion.logic.BiblePlace
 import com.mastifdogo.devotion.logic.BibleRef
 import com.mastifdogo.devotion.logic.ChapterTimings
 import com.mastifdogo.devotion.logic.BibleRefLogic
@@ -129,6 +132,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val wallpaperStore = WallpaperStore(application.filesDir)
     private val readStore = ReadStore(application.filesDir)
     private val bibleAudioStore = BibleAudioStore(application.filesDir)
+    private val bibleProgressStore = BibleProgressStore(application.filesDir)
 
     // ---- navigation -------------------------------------------------------------------------
 
@@ -198,6 +202,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var autoDownload: Boolean by mutableStateOf(settings.autoDownloadAudio)
         private set
+    /** When an entry has been heard to the end, the next unread one (then the Bible) plays by itself. */
+    var autoplay: Boolean by mutableStateOf(settings.autoplay)
+        private set
     var themeMode: ThemeMode by mutableStateOf(ThemeMode.fromKey(settings.themeMode))
         private set
     var playbackSpeed: Float by mutableStateOf(sanitizeSpeed(settings.playbackSpeed))
@@ -235,6 +242,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         autoDownload = value
         settings.autoDownloadAudio = value
         if (value) startAutoDownload() else autoDownloadJob?.cancel()
+    }
+
+    fun updateAutoplay(value: Boolean) {
+        autoplay = value
+        settings.autoplay = value
+        if (!value) autoplayJob?.cancel()
     }
 
     fun updateThemeMode(value: ThemeMode) {
@@ -330,6 +343,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Read marks are kept per server and profile (profile 0 while none is chosen).
         readIds = if (isServerConfigured) readStore.load(key, stored?.id ?: 0L) else emptySet()
+        // So is the place autoplay has reached in the Bible. A chapter it is playing belongs to the
+        // profile it was started for, and is an ordinary chapter from here on.
+        autoBibleRef = null
+        biblePlace = if (isServerConfigured) bibleProgressStore.load(key, stored?.id ?: 0L) else null
         loadVoiceContext()
     }
 
@@ -1083,18 +1100,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             this@MainViewModel.isPlaying = isPlaying
+            // Paused in a chapter autoplay is reading: remember how far it got.
+            if (!isPlaying) noteAutoBiblePosition()
             refreshPosition()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                val finishedEntry = playerEntryId
+                val finishedChapter = autoBibleRef?.takeIf { it == playerBibleRef }
                 // Listened to the end: the entry counts as read.
-                playerEntryId?.let { markRead(it) }
+                finishedEntry?.let { markRead(it) }
+                // A chapter autoplay read: the next one follows it. One played by hand changes nothing.
+                if (finishedChapter != null) {
+                    saveBiblePlace(finishedChapter, positionMs = 0L, finished = true)
+                    autoBibleRef = null
+                }
                 // Rewind so the next Play starts from the beginning.
                 controller?.let {
                     it.pause()
                     it.seekTo(0L)
                 }
+                if (autoplay && (finishedEntry != null || finishedChapter != null)) autoplayNext(finishedEntry)
             }
             refreshPosition()
         }
@@ -1197,6 +1224,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         audioError = null
         requestNotificationPermissionOnce()
+        autoplayJob?.cancel()
         pendingPlay = entry.id to voice
         viewModelScope.launch {
             val ok = ensureAudio(entry, voice, reportErrors = true).await()
@@ -1256,6 +1284,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val entry = entryById(id)
         val heading = entry?.let { EntryKinds.heading(it, Locale.getDefault(), ZoneId.systemDefault()) }
+        leaveAutoBible()
         loadIntoPlayer(
             c,
             MiniPlayerLogic.mediaId(id, voice),
@@ -1299,6 +1328,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun stopPlayback() {
+        autoplayJob?.cancel()
+        leaveAutoBible()
         pendingPlay = null
         playerBibleRef = null
         chapterTimings = null
@@ -1486,6 +1517,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (preparingChapter == ref) return
+        autoplayJob?.cancel()
+        prepareChapter(ref, title, versionName, fromVerse, autoFromMs = null)
+    }
+
+    /**
+     * Gets the chapter's audio and plays it. [autoFromMs] is set when autoplay starts the chapter
+     * (see [autoplayBible]): where it stopped in it last time, 0 for a chapter it has not begun.
+     */
+    private fun prepareChapter(ref: BibleRef, title: String, versionName: String, fromVerse: Int?, autoFromMs: Long?) {
         chapterAudioError = null
         requestNotificationPermissionOnce()
         chapterAudioJob?.cancel()
@@ -1502,8 +1542,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 preparingChapter = null
                 // Where the tapped verse starts, if the chapter has verse times.
                 val timings = withContext(Dispatchers.IO) { bibleAudioStore.loadTimings(ref, premium) }
-                val startMs = fromVerse?.let { BibleAudioLogic.seekTarget(timings, it) } ?: 0L
-                startChapterPlayback(ref, title, versionName, timings, startMs)
+                val startMs = fromVerse?.let { BibleAudioLogic.seekTarget(timings, it) }
+                    ?: autoFromMs?.let { AutoplayLogic.resumeMs(timings, it) }
+                    ?: 0L
+                startChapterPlayback(ref, title, versionName, timings, startMs, auto = autoFromMs != null)
             } catch (e: CancellationException) {
                 if (preparingChapter == ref) preparingChapter = null
                 throw e
@@ -1567,6 +1609,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         versionName: String,
         timings: ChapterTimings?,
         startMs: Long,
+        auto: Boolean = false,
     ) {
         val premium = biblePremium
         val file = bibleAudioStore.file(ref, premium)
@@ -1576,11 +1619,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val c = controller
         if (c == null) {
-            afterConnect = { startChapterPlayback(ref, title, versionName, timings, startMs) }
+            afterConnect = { startChapterPlayback(ref, title, versionName, timings, startMs, auto) }
             connectController()
             return
         }
         pendingPlay = null
+        leaveAutoBible()
         loadIntoPlayer(c, BibleAudioLogic.mediaId(ref), file, title, versionName, startMs, true)
         playerEntryId = null
         playerVoice = null
@@ -1590,6 +1634,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         positionMs = startMs
         durationMs = 0L
         chapterTimings = timings
+        if (auto) {
+            // Autoplay's own chapter: this is where it is in the Bible now.
+            autoBibleRef = ref
+            saveBiblePlace(ref, startMs, finished = false)
+        }
         // An older download without verse times: try once, quietly, to get them.
         if (timings == null) loadChapterTimings(ref)
         // Played now: least recently played chapters go first when the cache is over its limit.
@@ -1599,6 +1648,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 bibleAudioStore.trim(keep = ref, premium = premium)
             }
             refreshChapterAudioCache()
+        }
+    }
+
+    // ---- autoplay ---------------------------------------------------------------------------
+    //
+    // When an entry has been heard to the end, the next thing plays by itself: the latest unread
+    // daily reading; when all are read, the latest unread lesson; when those are read too, the
+    // Bible, a chapter after the other from where autoplay left it. That place is kept per server
+    // and profile and only autoplay moves it: chapters played by hand in the Bible tab do not.
+
+    /** Where autoplay is in the Bible (the chapter it played last); null before it has played any. */
+    var biblePlace: BiblePlace? by mutableStateOf(null)
+        private set
+
+    /** The loaded chapter, when autoplay started it. */
+    private var autoBibleRef: BibleRef? = null
+    private var autoplayJob: Job? = null
+
+    /** Book names and chapter counts of the version autoplay reads, so it is parsed once. */
+    private class BibleShape(val id: String, val name: String, val bookNames: List<String>, val chapterCounts: List<Int>)
+    private var bibleShape: BibleShape? = null
+
+    private fun saveBiblePlace(ref: BibleRef, positionMs: Long, finished: Boolean) {
+        if (!isServerConfigured) return
+        val place = BiblePlace(ref.book, ref.chapter, positionMs.coerceAtLeast(0L), finished, playerBibleTitle)
+        biblePlace = place
+        try {
+            bibleProgressStore.save(serverKey, profile?.id ?: 0L, place)
+        } catch (e: Exception) {
+            // Kept in memory; written again at the next pause or chapter.
+        }
+    }
+
+    /** Autoplay's chapter is loaded and has stopped playing: remember how far it got. */
+    private fun noteAutoBiblePosition() {
+        val ref = autoBibleRef ?: return
+        val c = controller ?: return
+        if (ref != playerBibleRef || c.playbackState == Player.STATE_ENDED) return
+        saveBiblePlace(ref, c.currentPosition, finished = false)
+    }
+
+    /** Something else is about to be loaded (or playback stops): autoplay's chapter is left where it is. */
+    private fun leaveAutoBible() {
+        noteAutoBiblePosition()
+        autoBibleRef = null
+    }
+
+    /** Plays what follows the entry (or autoplay's chapter) that just ended. */
+    private fun autoplayNext(finishedEntryId: Long?) {
+        val next = AutoplayLogic.nextEntry(entries, readIds, finishedEntryId) { voiceFor(it) != null }
+        if (next != null) playPause(next) else autoplayBible()
+    }
+
+    /** Everything is read: carry on in the Bible, in the version the Bible tab was last open in. */
+    private fun autoplayBible() {
+        if (!bibleAudioAvailable || !isServerConfigured) return
+        val versionId = preferredBibleId() ?: return
+        autoplayJob?.cancel()
+        autoplayJob = viewModelScope.launch {
+            val shape = try {
+                bibleShapeOf(versionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@launch
+            }
+            // Something was started by hand while the version was being read from disk.
+            if (controller?.isPlaying == true || pendingPlay != null || preparingChapter != null) return@launch
+            val step = AutoplayLogic.nextChapter(biblePlace, shape.chapterCounts) ?: return@launch
+            val ref = BibleRef(versionId, step.book, step.chapter)
+            val title = BibleAudioLogic.chapterTitle(shape.bookNames[step.book], step.chapter)
+            prepareChapter(ref, title, shape.name, fromVerse = null, autoFromMs = step.startMs)
+        }
+    }
+
+    private suspend fun bibleShapeOf(id: String): BibleShape {
+        bibleShape?.takeIf { it.id == id }?.let { return it }
+        val bible = openBible?.takeIf { it.id == id } ?: withContext(Dispatchers.IO) { bibleStore.load(id) }
+        val name = bible.name.ifBlank { downloadedBibles.firstOrNull { it.id == id }?.name.orEmpty() }
+        return BibleShape(id, name, bible.books.map { it.name }, bible.books.map { it.chapters.size }).also { bibleShape = it }
+    }
+
+    /** Settings: begin the Bible again at its first chapter the next time autoplay reaches it. */
+    fun resetBiblePlace() {
+        autoBibleRef = null
+        biblePlace = null
+        try {
+            bibleProgressStore.clear(serverKey, profile?.id ?: 0L)
+        } catch (e: Exception) {
+            // Nothing to do.
         }
     }
 

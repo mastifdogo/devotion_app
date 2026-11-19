@@ -209,6 +209,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		voices: await voices.list(),
 		background_error: (() => { const e = lastBackgroundError; lastBackgroundError = null; return e; })(),
 		bible_audio: bibleAudio ? await bibleAudio.usage() : null,
+		bible_read_all: bibleAudio?.readAllView() ?? null,
 		...adminStateSync(),
 	});
 	const adminStateSync = () => ({
@@ -690,6 +691,23 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		requireAdmin(req);
 		await readJson(req);
 		if (bibleAudio) await bibleAudio.clear();
+		send(res, 200, await adminState());
+	});
+
+	// Reads every chapter of one version ahead of time, with Piper (hours of work; see bibleaudio.js).
+	route('POST', /^\/admin\/api\/bible-audio\/read-all$/, async (req, res) => {
+		requireAdmin(req);
+		const body = await readJson(req);
+		if (!bibleAudio) throw new HttpError(404, 'Listening to the Bible is not available on this server.');
+		if (typeof body.version !== 'string' || !/^[a-z0-9]{1,20}$/.test(body.version)) throw new HttpError(400, 'Choose a Bible version.');
+		bibleAudio.startReadAll(body.version);
+		send(res, 202, await adminState());
+	});
+
+	route('POST', /^\/admin\/api\/bible-audio\/read-all\/stop$/, async (req, res) => {
+		requireAdmin(req);
+		await readJson(req);
+		bibleAudio?.stopReadAll();
 		send(res, 200, await adminState());
 	});
 
