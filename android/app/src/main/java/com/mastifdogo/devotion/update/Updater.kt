@@ -144,8 +144,29 @@ class Updater(private val cacheDir: File) {
     companion object {
         const val APK_MIME = "application/vnd.android.package-archive"
 
+        /**
+         * Throws unless [apk] is an update of this very app. A release could hold any APK under
+         * a name ending in .apk; Android itself only refuses a different key when the package
+         * name is the same, so one with another name would be offered as a new app, from this
+         * app's own update button. Such a download is deleted and never handed to the installer.
+         */
+        fun requireThisApp(context: Context, apk: File) {
+            val found = try {
+                context.packageManager.getPackageArchiveInfo(apk.path, 0)?.packageName
+            } catch (e: Exception) {
+                null
+            }
+            if (found == context.packageName) return
+            apk.delete()
+            throw IOException(
+                if (found == null) "The download is not an Android app, so it was not opened."
+                else "The download is a different app ($found), not Devotion, so it was not opened.",
+            )
+        }
+
         /** Intent that hands [apk] (inside cacheDir/updates/) to the system package installer. */
         fun installIntent(context: Context, apk: File): Intent {
+            requireThisApp(context, apk)
             val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", apk)
             return Intent(Intent.ACTION_VIEW)
                 .setDataAndType(uri, APK_MIME)

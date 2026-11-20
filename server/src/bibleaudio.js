@@ -37,18 +37,37 @@ export function chapterParts(bookName, chapter, verses) {
 	return parts;
 }
 
+// Listening needs no login, so what one address on the network can set going is bounded:
+// this many chapters wait to be read for listeners at once (more are answered "being made" and
+// start when there is room; a person listens to one chapter at a time)...
+const MAX_WAITING = 6;
+// ...and the speech API, which bills for each one, reads only so many new chapters in 24 hours
+// (the bible_premium_daily setting; the server's own voice has no such limit).
+const DAY_MS = 86_400_000;
+
 export class BibleAudio {
 	/**
 	 * appVersion: the version the app carries with it. People read it there without this server
 	 * having it, so the server fetches it by itself the first time someone listens to it.
 	 */
-	constructor({ bibles, tts, settings, dataDir, log = console, appVersion = 'kjv' }) {
+	constructor({ bibles, tts, settings, dataDir, log = console, appVersion = 'kjv', clock = () => Date.now() }) {
 		Object.assign(this, { bibles, tts, settings, log, appVersion });
 		this.dir = path.join(dataDir, 'bible-audio');
 		this.making = new Map(); // file name -> promise
 		this.failed = new Map(); // file name -> message, until asked again
 		this.loaded = null; // the version read last, kept in memory: chapters are asked for one after another
 		this.all = null; // reading a whole version ahead of time: { version, name, done, total, failed, running, note }
+		this.asked = 0; // chapters being made because a listener asked
+		this.premiumMade = []; // when the speech API started each new chapter, the last 24 hours
+		this.clock = clock;
+	}
+
+	/** How many new chapters the speech API may still read today. */
+	premiumLeft() {
+		const limit = Number(this.settings.get('bible_premium_daily'));
+		const t = this.clock();
+		this.premiumMade = this.premiumMade.filter((at) => t - at < DAY_MS);
+		return Math.max(0, (Number.isFinite(limit) ? limit : 100) - this.premiumMade.length);
 	}
 
 	enabled() {
@@ -96,8 +115,9 @@ export class BibleAudio {
 	 * { duration, exact, verses: [{ verse, start, end }] } in seconds. Throws when
 	 * it is off, when there is no such chapter, or with the reason the last attempt failed (once).
 	 * premium: read by the speech API's voice, which only a person asking for it in the app gets.
+	 * ahead: read ahead of time for the owner (the whole Bible), not for a listener, so not counted against them.
 	 */
-	async get(versionId, book, chapter, { premium = false } = {}) {
+	async get(versionId, book, chapter, { premium = false, ahead = false } = {}) {
 		const voice = premium ? this.premium()?.id ?? null : this.tts.bibleVoiceId();
 		if (!voice) throw new BibleAudioError(premium ? 'The speech service does not read the Bible on this server.' : 'Listening to the Bible is not switched on for this server.', 404);
 		if (versionId === this.appVersion && !this.bibles.get(versionId) && this.bibles.catalog.some((c) => c.id === versionId)) return this.fetchVersion(versionId);
@@ -119,6 +139,15 @@ export class BibleAudio {
 			throw new BibleAudioError(error, 502);
 		}
 		if (!this.making.has(name)) {
+			if (!ahead) {
+				// No room right now: "being made", and it starts when the listener's app asks again.
+				if (this.asked >= MAX_WAITING) return { state: 'making' };
+				if (premium) {
+					if (this.premiumLeft() < 1) throw new BibleAudioError('The speech service has read as many new chapters as this server allows in a day. The server\'s own voice still reads; the limit is under Audio on the admin page.', 429);
+					this.premiumMade.push(this.clock());
+				}
+				this.asked++;
+			}
 			const job = this.tts.synthesizeParts(name, parts.map((p) => p.text), voice, this.dir)
 				.then(async (made) => {
 					const round = (x) => Math.round(x * 1000) / 1000;
@@ -131,7 +160,10 @@ export class BibleAudio {
 					this.log.error(`bible audio ${name}: ${err.message}`);
 					this.failed.set(name, err.message);
 				})
-				.finally(() => this.making.delete(name));
+				.finally(() => {
+					this.making.delete(name);
+					if (!ahead) this.asked--;
+				});
 			this.making.set(name, job);
 		}
 		return { state: 'making', job: this.making.get(name) };
@@ -200,8 +232,8 @@ export class BibleAudio {
 				// The owner handed the Bible to something else meanwhile: Piper stops here.
 				if (this.tts.engineFor('bible') !== 'piper') { all.stopped = true; all.note = 'Stopped: the Bible is no longer read by Piper.'; return; }
 				try {
-					let got = await this.get(all.version, book, chapter);
-					if (got.state !== 'ready') { await got.job; got = await this.get(all.version, book, chapter); }
+					let got = await this.get(all.version, book, chapter, { ahead: true });
+					if (got.state !== 'ready') { await got.job; got = await this.get(all.version, book, chapter, { ahead: true }); }
 					if (got.state !== 'ready') throw new BibleAudioError('The chapter was not made.', 502);
 					all.done++;
 					failedInARow = 0;

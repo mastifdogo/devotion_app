@@ -5,8 +5,13 @@ import { parseMessage, redirectUri } from '../src/gmail.js';
 import { chunkText, speechText } from '../src/tts.js';
 import { compareVersions, TAG_RE } from '../src/update.js';
 import { normalizeEntries } from '../src/extract.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
+import { BibleAudio } from '../src/bibleaudio.js';
+import { Wallpapers } from '../src/wallpapers.js';
+import { clientKey } from '../src/server.js';
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
 
@@ -204,4 +209,57 @@ test('WallPick: dark ones in the evening when asked for, and a random part of a 
 	assert.equal(WallPick.choose(library, browser(own), 'night', { now: at(22), random: sequence(0, 0.5) }).id, 'day');
 	// A browser that refuses storage keeps the wallpaper.
 	assert.equal(WallPick.choose(library, () => { throw new Error('blocked'); }, null), null);
+});
+
+test('clientKey: one machine is one address, however it is written', () => {
+	assert.equal(clientKey('192.168.1.20'), '192.168.1.20');
+	assert.equal(clientKey('::ffff:192.168.1.20'), '192.168.1.20');
+	// An IPv6 machine has a whole /64 to itself, so that is what is counted.
+	assert.equal(clientKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), clientKey('2001:0db8:0001:0002::1'));
+	assert.notEqual(clientKey('2001:db8:1:2::1'), clientKey('2001:db8:1:3::1'));
+	assert.equal(clientKey('fe80::1%eth0'), 'fe80:0:0:0::/64');
+	assert.equal(clientKey('::1'), '0:0:0:0::/64');
+	assert.equal(clientKey(undefined), '');
+});
+
+test('wallpaper downloads: only from Wallhaven, only pictures, never more than the limit', async () => {
+	const answer = ({ url = '', type = 'image/jpeg', length = null, chunks = [Buffer.alloc(500, 1)] }) => ({
+		ok: true, status: 200, url,
+		headers: new Headers({ 'content-type': type, ...(length != null ? { 'content-length': String(length) } : {}) }),
+		body: new ReadableStream({ pull(c) { const next = chunks.shift(); if (next) c.enqueue(next); else c.close(); } }),
+	});
+	const download = (res) => new Wallpapers({ db: null, dataDir: '/nowhere', fetchImpl: async () => answer(res) }).download('https://w.wallhaven.cc/full/aa/wallhaven-aaa111.jpg');
+	assert.deepEqual((({ data, ext, type }) => [data.length, ext, type])(await download({ url: 'https://w.wallhaven.cc/full/aa/wallhaven-aaa111.jpg' })), [500, 'jpg', 'image/jpeg']);
+	await assert.rejects(download({ url: 'https://elsewhere.example/x.jpg' }), /sent to another site/);
+	await assert.rejects(download({ url: 'http://w.wallhaven.cc/x.jpg' }), /sent to another site/);
+	await assert.rejects(download({ type: 'text/html' }), /Not an image/);
+	await assert.rejects(download({ length: 31 * 1024 * 1024 }), /too large/);
+	// No length given, and it never ends: dropped once past the limit.
+	let sent = 0;
+	const endless = { ok: true, status: 200, url: '', headers: new Headers({ 'content-type': 'image/png' }), body: new ReadableStream({ pull(c) { sent++; c.enqueue(new Uint8Array(1024 * 1024)); } }, { highWaterMark: 1 }) };
+	await assert.rejects(new Wallpapers({ db: null, dataDir: '/nowhere', fetchImpl: async () => endless }).download('https://w.wallhaven.cc/x.png'), /too large/);
+	assert.ok(sent >= 31 && sent < 40, `stopped after ${sent} MB`);
+});
+
+test('bible audio: only so many chapters wait to be read for listeners at once', async (t) => {
+	const dir = mkdtempSync(path.join(tmpdir(), 'devotion-bible-audio-'));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const waiting = []; // each chapter being "read": finish it by calling its entry
+	const tts = { bibleVoiceId: () => 'voice', biblePremiumVoice: () => null, synthesizeParts: () => new Promise((resolve, reject) => waiting.push(() => reject(new Error('stopped')))) };
+	const audio = new BibleAudio({ bibles: { get: () => ({ sha256: 'x' }), catalog: [] }, tts, settings: { get: () => '' }, dataDir: dir, log: { info() {}, error() {} } });
+	audio.loaded = { id: 'tst', sha256: 'x', data: { books: [{ name: 'Book', chapters: Array.from({ length: 20 }, (_, i) => [`verse of chapter ${i + 1}`]) }] } };
+	for (let chapter = 1; chapter <= 12; chapter++) assert.equal((await audio.get('tst', 0, chapter)).state, 'making');
+	assert.equal(waiting.length, 6); // the other six were told "being made" without being started
+	// Asking again for one that is being read starts nothing new; the owner's "read it all" is not held back.
+	await audio.get('tst', 0, 1);
+	assert.equal(waiting.length, 6);
+	await audio.get('tst', 0, 20, { ahead: true });
+	assert.equal(waiting.length, 7);
+	// When one is done there is room for the next.
+	waiting[0]();
+	await new Promise((r) => setTimeout(r, 5));
+	await audio.get('tst', 0, 12);
+	assert.equal(waiting.length, 8);
+	for (const stop of waiting) stop();
+	await new Promise((r) => setTimeout(r, 5));
 });

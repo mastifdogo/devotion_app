@@ -89,6 +89,23 @@ class UpdateLogicTest {
     }
 
     @Test
+    fun downloadFor_sendsTheTokenToGithubsApiOnly() {
+        // A release that names another host (or plain http) for its asset never gets the token.
+        for (elsewhere in listOf(
+            "https://evil.example/repos/o/r/releases/assets/1",
+            "http://api.github.com/repos/o/r/releases/assets/1",
+            "https://api.github.com.evil.example/assets/1",
+        )) {
+            val asset = ReleaseAsset(name = "app.apk", url = elsewhere, browserDownloadUrl = "https://github.com/o/r/releases/download/v1/app.apk")
+            val download = UpdateLogic.downloadFor(asset, hasToken = true)
+            assertFalse(elsewhere, download!!.useToken)
+            assertEquals(asset.browserDownloadUrl, download.url)
+            assertFalse(UpdateLogic.downloadFor(ReleaseAsset(name = "app.apk", url = elsewhere), hasToken = true)!!.useToken)
+        }
+        assertTrue(UpdateLogic.isGithubApiUrl("https://api.github.com/repos/o/r/releases/assets/1"))
+    }
+
+    @Test
     fun rateLimitWaitSeconds_readsHeaders() {
         // Exhausted quota: wait until the reset time.
         assertEquals(600L, UpdateLogic.rateLimitWaitSeconds(403, "0", "1600", null, 1000L))

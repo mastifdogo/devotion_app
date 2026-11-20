@@ -2,6 +2,7 @@ package com.mastifdogo.devotion.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -12,6 +13,7 @@ import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.mastifdogo.devotion.MainActivity
+import java.io.File
 
 /**
  * Owns the ExoPlayer and its media session, so audio keeps playing with the app in the background
@@ -54,7 +56,7 @@ class PlaybackService : MediaSessionService() {
 
         session = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivity)
-            .setCallback(ResolveUris())
+            .setCallback(ResolveUris(filesDir))
             .build()
     }
 
@@ -83,18 +85,32 @@ class PlaybackService : MediaSessionService() {
     /**
      * Media items lose their URI on the way from a controller to the session; the app therefore
      * puts the file URI into the request metadata and it is restored here.
+     *
+     * The service is open to other apps' media controllers (the lock screen, a watch, a car), so
+     * what a controller sends is not trusted: only audio this app downloaded, a file under
+     * [filesDir], is ever played. Anything else (a web address, another app's file) is dropped.
      */
-    private class ResolveUris : MediaSession.Callback {
+    private class ResolveUris(private val filesDir: File) : MediaSession.Callback {
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> {
-            val resolved = mediaItems.map { item ->
-                val uri = item.requestMetadata.mediaUri
-                if (item.localConfiguration == null && uri != null) item.buildUpon().setUri(uri).build() else item
+            val resolved = mediaItems.mapNotNull { item ->
+                val uri = item.localConfiguration?.uri ?: item.requestMetadata.mediaUri
+                if (uri == null || !isOwnFile(uri)) null else item.buildUpon().setUri(uri).build()
             }.toMutableList()
             return Futures.immediateFuture(resolved)
+        }
+
+        private fun isOwnFile(uri: Uri): Boolean {
+            if (uri.scheme != "file") return false
+            val path = uri.path ?: return false
+            return try {
+                File(path).canonicalFile.toPath().startsWith(filesDir.canonicalFile.toPath())
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 

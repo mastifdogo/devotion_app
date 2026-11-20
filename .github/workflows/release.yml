@@ -45,6 +45,10 @@ jobs:
       SUITE: trixie # the Debian release the template is built on
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The token that may publish is given to the publishing step alone, not left in
+          # .git/config for the tests, the build tools and everything they download to find.
+          persist-credentials: false
 
       - name: Check the tag
         run: |

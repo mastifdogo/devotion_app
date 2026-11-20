@@ -137,8 +137,10 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 	const wallpapers = new Wallpapers({ db, dataDir: dir, fetchImpl: whFetch, log: quiet });
 	const pipeline = new Pipeline({ db, settings, gmail, extractor, tts, audioDir, archiver, log: quiet });
 	const updater = new Updater({ config, settings, fetchImpl: async (url, init) => { calls.github.push({ url: String(url), headers: init.headers }); return github(); } });
-	const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: dir, log: quiet, appVersion: 'tst' });
-	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, bibleAudio, audioDir, log: quiet });
+	const time = { ahead: 0 }; // tests move the server's clock forward with this
+	const clock = () => Date.now() + time.ahead;
+	const bibleAudio = new BibleAudio({ bibles, tts, settings, dataDir: dir, log: quiet, appVersion: 'tst', clock });
+	const server = createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, bibleAudio, audioDir, log: quiet, loginDelayMs: 0, clock });
 	await new Promise((r) => server.listen(0, '127.0.0.1', r));
 	const base = `http://127.0.0.1:${server.address().port}`;
 	t.after(() => { server.close(); server.closeAllConnections(); db.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -159,7 +161,7 @@ async function setup(t, { extractResult, github, m1 } = {}) {
 		await call(`/oauth/callback?state=${new URL(url).searchParams.get('state')}&code=good-code`);
 		while (pipeline.running) await new Promise((r) => setTimeout(r, 5));
 	};
-	return { call, calls, settings, db, pipeline, gmail, config, dir, audioDir, share, archiver, base, connectGmail, wallhaven, dropCookie: () => (cookie = '') };
+	return { call, calls, settings, db, pipeline, gmail, config, dir, audioDir, share, archiver, base, connectGmail, wallhaven, time, bibleAudio, dropCookie: () => (cookie = '') };
 }
 
 test('first visit sets the password; afterwards only that password logs in', async (t) => {
@@ -197,6 +199,48 @@ test('first visit sets the password; afterwards only that password logs in', asy
 		assert.match(html, /const WallPick = /);
 		assert.ok(!html.includes('<!-- wallpick.js -->'));
 	}
+	// No page may be framed, load anything from elsewhere, or have its links and forms pointed elsewhere.
+	for (const res of [start, read, await call('/admin')]) {
+		const csp = res.headers.get('content-security-policy');
+		for (const rule of ["default-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"]) assert.ok(csp.includes(rule), rule);
+		assert.equal(res.headers.get('x-frame-options'), 'DENY');
+		assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+		assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+	}
+});
+
+test('admin: wrong passwords from one address are counted, and after five it has to wait', async (t) => {
+	const { call, time, dropCookie } = await setup(t);
+	await call('/admin/api/setup', { body: { password: 'correct horse' } });
+	dropCookie();
+	const login = (password) => call('/admin/api/login', { body: { password } });
+	// Four wrong, then the right one: let in, and the count starts again.
+	for (let i = 0; i < 4; i++) assert.equal((await login('guess ' + i)).status, 401);
+	assert.equal((await login('correct horse')).status, 200);
+	dropCookie();
+	// Five wrong, all sent at once: counted all the same.
+	assert.deepEqual((await Promise.all([0, 1, 2, 3, 4].map((i) => login('guess ' + i)))).map((r) => r.status), [401, 401, 401, 401, 401]);
+	// Now not even the right password is looked at...
+	const locked = await login('correct horse');
+	assert.equal(locked.status, 429);
+	assert.match((await locked.json()).error, /Too many wrong passwords.*30 seconds/);
+	assert.equal(locked.headers.get('retry-after'), '30');
+	assert.equal((await call('/admin/api/state')).status, 401);
+	// ...until the wait is over. Another wrong one then waits twice as long.
+	time.ahead += 31_000;
+	assert.equal((await login('guess again')).status, 401);
+	assert.match((await (await login('correct horse')).json()).error, /60 seconds/);
+	time.ahead += 61_000;
+	assert.equal((await login('correct horse')).status, 200);
+	// The same count guards "current password" when changing it.
+	for (let i = 0; i < 5; i++) assert.equal((await call('/admin/api/password', { body: { current: 'nope ' + i, password: 'new password' } })).status, 403);
+	assert.equal((await call('/admin/api/password', { body: { current: 'correct horse', password: 'new password' } })).status, 429);
+	// Behind an https address the session cookie is marked Secure; on plain http in the house it is not.
+	time.ahead += 31_000;
+	dropCookie();
+	const viaProxy = await fetch((await call('/admin/api/session')).url.replace('/session', '/login'), { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-proto': 'https' }, body: JSON.stringify({ password: 'correct horse' }) });
+	assert.match(viaProxy.headers.get('set-cookie'), /^sid=[\w-]+; HttpOnly; SameSite=Strict; Path=\/; Secure; Max-Age=43200$/);
+	assert.match((await login('correct horse')).headers.get('set-cookie'), /^sid=[\w-]+; HttpOnly; SameSite=Strict; Path=\/; Max-Age=43200$/);
 });
 
 test('settings: secrets are write-only and an empty secret keeps the saved one', async (t) => {
@@ -218,13 +262,22 @@ test('settings: secrets are write-only and an empty secret keeps the saved one',
 	assert.equal(settings.get('google_refresh_token'), '');
 	state = await (await call('/admin/api/settings', { body: { anthropic_api_key: '' } })).json();
 	assert.equal(settings.get('anthropic_api_key'), 'sk-secret');
+	// Which program the server runs, and with which file, is never taken from the page.
+	await call('/admin/api/settings', { body: { piper_bin: '/bin/sh', piper_model: '/tmp/x.onnx' } });
+	assert.deepEqual([settings.get('piper_bin'), settings.get('piper_model')], ['piper', '']);
+	// A speech API's address is an http(s) address or it is not saved; the daily limit is a number.
+	state = await (await call('/admin/api/settings', { body: { tts_openai_base_url: 'file:///etc/passwd', bible_premium_daily: 'lots' } })).json();
+	assert.deepEqual([state.settings.tts_openai_base_url, state.settings.bible_premium_daily], ['https://api.openai.com/v1', '100']);
+	state = await (await call('/admin/api/settings', { body: { tts_openai_base_url: 'https://speech.example/v1', bible_premium_daily: '25' } })).json();
+	assert.deepEqual([state.settings.tts_openai_base_url, state.settings.bible_premium_daily], ['https://speech.example/v1', '25']);
 });
 
 test('gmail oauth, mail to entries to audio, and the app API', async (t) => {
 	const { call, calls, settings, pipeline, audioDir, dropCookie } = await setup(t);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
 	assert.equal((await call('/admin/api/oauth/start', { body: {} })).status, 400); // no client id yet
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'Daily\nreceipt', gmail_query: 'from:daily@example.org', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'Daily\nreceipt', gmail_query: 'from:daily@example.org', anthropic_api_key: 'sk' } });
+	settings.set('piper_model', '/voice.onnx'); // as an installed server has it: from its environment, not from the page
 
 	// OAuth: the consent URL, a forged state, a bad code, then the real callback.
 	const { url } = await (await call('/admin/api/oauth/start', { body: {} })).json();
@@ -305,7 +358,8 @@ test('premium speech for lessons, daily readings, or both', async (t) => {
 		extractResult: (p) => ({ entries: p.messages[0].content.includes('Receipt') ? [reading] : [lesson] }),
 	});
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt, order', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt, order', anthropic_api_key: 'sk' } });
+	settings.set('piper_model', '/voice.onnx');
 	await connectGmail();
 	const entries = async () => (await (await call('/api/entries')).json()).entries;
 	const wait = async (check) => { for (let i = 0; i < 100 && !check(await entries()); i++) await new Promise((r) => setTimeout(r, 10)); };
@@ -373,13 +427,14 @@ test('premium speech for lessons, daily readings, or both', async (t) => {
 test('a lesson is sorted from its subject, not by the model, and can be corrected by hand', async (t) => {
 	// The model says nothing about lessons; it only cleans the text and summarizes.
 	const lesson = { title: 'Victory After Struggling', entry_date: '2026-11-08', scripture: 'Genesis 32:24-31; 1 Samuel 17:45-49', summary: 'S.', body: 'Victory! What a sweet refrain.', references: [] };
-	const { call, calls, connectGmail, pipeline } = await setup(t, {
+	const { call, calls, connectGmail, pipeline, settings } = await setup(t, {
 		m1: { subject: 'Lesson 11 – Victory After Struggling', html: '<p>COGICM Daily Bible Readings</p><p>Victory After Struggling</p><p>Lesson 11</p><p>November 15, 2026</p><p>Give us this day.</p>' },
 		extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [lesson] }),
 	});
 	assert.ok(!JSON.stringify(calls.claude).includes('lesson_number'));
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk' } });
+	settings.set('piper_model', '/voice.onnx');
 	await connectGmail();
 	assert.ok(!('kind' in calls.claude[0].output_config.format.schema.properties.entries.items.properties));
 	let [entry] = (await (await call('/api/entries')).json()).entries;
@@ -407,12 +462,13 @@ test('a lesson is sorted from its subject, not by the model, and can be correcte
 
 test('a daily reading is sorted from its subject, with its day, its week\'s lesson and its passage', async (t) => {
 	const reading = { title: 'The struggle is spiritual', entry_date: '2026-11-14', scripture: null, summary: 'S.', body: 'For the weapons of our warfare are not carnal.', references: [] };
-	const { call, calls, connectGmail } = await setup(t, {
+	const { call, calls, connectGmail, settings } = await setup(t, {
 		m1: { subject: 'November 15, 2026 – The struggle is spiritual', html: '<p>COGICM Daily Bible Readings</p><p><b>Lesson 11 – Victory After Struggling</b><br><b>Today’s Quote:</b> “A quote.”<br><b>November 15, 2026 – The struggle is spiritual</b><br><b>2 Cor. 10:4-6</b></p><p>KJV<br>4 Give us this day.</p>' },
 		extractResult: (p) => (p.messages[0].content.includes('Receipt') ? { entries: [] } : { entries: [reading] }),
 	});
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'day, receipt', anthropic_api_key: 'sk' } });
+	settings.set('piper_model', '/voice.onnx');
 	await connectGmail();
 	const [entry] = (await (await call('/api/entries')).json()).entries;
 	assert.deepEqual([entry.kind, entry.lesson_number, entry.title, entry.entry_date, entry.scripture], ['daily_reading', 11, 'The struggle is spiritual', '2026-11-15', '2 Cor. 10:4-6']);
@@ -499,7 +555,7 @@ test('as many voice engines run at once as the machine has room for, and no more
 	try {
 		const db = openDb(dir);
 		const settings = new Settings(db, {});
-		settings.applyForm({ piper_model: '/voice.onnx' });
+		settings.set('piper_model', '/voice.onnx');
 		let machine = { cores: 1, memoryMb: 512, usableMb: 410 };
 		let running = 0, most = 0;
 		const runImpl = async (cmd, args) => {
@@ -687,7 +743,7 @@ test('profiles, and notes and highlights kept per profile', async (t) => {
 });
 
 test('bible versions: checked, converted, listed and served to the app', async (t) => {
-	const { call, base, calls, settings } = await setup(t);
+	const { call, base, calls, settings, time } = await setup(t);
 	assert.equal((await call('/admin/api/bibles/tst/install', { body: {} })).status, 401);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
 	assert.deepEqual(await (await call('/api/bibles')).json(), { bibles: [], audio: false });
@@ -721,7 +777,8 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.deepEqual(chapterParts('John', 1, ['a', '', 'c']), [{ verse: 1, text: 'John, chapter 1, verse 1. a' }, { verse: 3, text: 'Verse 3. c' }]);
 	assert.deepEqual(chapterParts('John', 3, ['', 'b']), [{ verse: 2, text: 'Chapter 3, verse 2. b' }]);
 	assert.deepEqual(chapterParts('Psalms', 23, ['x']).concat(chapterParts('Psalms', 1, ['x']), chapterParts('Jude', 1, ['x'])).map((p) => p.text), ['Psalm 23, verse 1. x', 'Psalms, Psalm 1, verse 1. x', 'Jude, verse 1. x']);
-	await call('/admin/api/settings', { body: { piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: {} });
+	settings.set('piper_model', '/voice.onnx');
 	assert.deepEqual((({ audio, audio_premium }) => [audio, audio_premium])(await (await call('/api/bibles')).json()), [true, undefined]);
 	// A speech API on the internet is not something the server chooses for the Bible.
 	await call('/admin/api/settings', { body: { bible_engine: 'openai' } });
@@ -806,6 +863,19 @@ test('bible versions: checked, converted, listed and served to the app', async (
 	assert.equal((await (await call('/api/bibles')).json()).audio_premium, undefined);
 	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 404);
 	await call('/admin/api/settings', { body: { bible_premium: 'on' } });
+	// The speech API bills for every chapter and listening needs no login: only so many new chapters in a day.
+	await call('/admin/api/settings', { body: { bible_premium_daily: '1' } });
+	calls.speechWav = true;
+	assert.equal((await call('/api/bibles/tst/audio/0/2?voice=premium')).status, 200); // one it has read already is not a new one
+	const over = await call('/api/bibles/tst/audio/0/1?voice=premium');
+	assert.equal(over.status, 429);
+	assert.match((await over.json()).error, /as many new chapters as this server allows in a day/);
+	assert.equal(calls.speech.length, speechBefore + 1);
+	assert.equal((await listen('/api/bibles/tst/audio/0/1')).status, 200); // the server's own voice has no such limit
+	time.ahead += 86_400_000 + 1000;
+	assert.equal((await listen('/api/bibles/tst/audio/0/1?voice=premium')).status, 200);
+	calls.speechWav = false;
+	await call('/admin/api/settings', { body: { bible_premium_daily: '100' } });
 
 	// "Read the whole Bible with Piper": every chapter of a version ahead of time, started by hand.
 	await call('/admin/api/settings', { body: { bible_engine: 'local' } });
@@ -856,7 +926,8 @@ test('bible versions: checked, converted, listed and served to the app', async (
 test('voices: every entry is made in every voice, and the app chooses', async (t) => {
 	const { call, calls, settings, connectGmail, dir, pipeline, db } = await setup(t);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'daily', anthropic_api_key: 'sk', piper_model: '/opt/voices/builtin.onnx', tts_rate: 'slow' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'daily', anthropic_api_key: 'sk', tts_rate: 'slow' } });
+	settings.set('piper_model', '/opt/voices/builtin.onnx');
 	let state = await (await call('/admin/api/state')).json();
 	assert.deepEqual(state.voices.map((v) => [v.id, v.installed, v.selected]), [['builtin', true, true], ['amy', false, false], ['bad', false, false]]);
 	const errors = [];
@@ -940,7 +1011,7 @@ test('audio made before voices were tracked is kept and given its voice', async 
 		old.close();
 		const db = openDb(dir);
 		const settings = new Settings(db, {});
-		settings.applyForm({ piper_model: '/opt/voices/lessac.onnx' });
+		settings.set('piper_model', '/opt/voices/lessac.onnx');
 		const tts = new Tts({ settings, audioDir: path.join(dir, 'audio'), voices: new Voices({ settings, dataDir: dir, catalog: [] }) });
 		const pipeline = new Pipeline({ db, settings, gmail: {}, extractor: {}, tts, audioDir: path.join(dir, 'audio'), log: quiet });
 		pipeline.adoptLegacyAudio();
@@ -955,7 +1026,8 @@ test('audio made before voices were tracked is kept and given its voice', async 
 test('archive: old entries go to the share, and only then leave the server', async (t) => {
 	const { call, calls, settings, pipeline, db, share, archiver, audioDir, connectGmail } = await setup(t);
 	await call('/admin/api/setup', { body: { password: 'correct horse' } });
-	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'daily', anthropic_api_key: 'sk', piper_model: '/voice.onnx' } });
+	await call('/admin/api/settings', { body: { google_client_id: 'cid', google_client_secret: 'cs', gmail_keywords: 'daily', anthropic_api_key: 'sk' } });
+	settings.set('piper_model', '/voice.onnx');
 	// The test email is dated November 2025: a year old, so due at once. Without a share nothing moves.
 	await connectGmail();
 	assert.equal(calls.smb.length, 0);

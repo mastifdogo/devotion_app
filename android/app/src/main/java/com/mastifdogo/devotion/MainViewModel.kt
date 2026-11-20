@@ -2445,7 +2445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 update = UpdateUi.Downloading(available.version, fraction)
                             }
                         }
-                    }
+                    }.also { Updater.requireThisApp(getApplication<Application>(), it) }
                 }
                 // Hand the APK straight to the installer; the "Install" button stays as a fallback.
                 try {

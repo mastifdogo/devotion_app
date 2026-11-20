@@ -140,10 +140,24 @@ export class Wallpapers {
 			throw new WallpaperError(`Could not download the image: ${err.cause?.code || err.message}`);
 		}
 		if (!res.ok) throw new WallpaperError(`The image download answered ${res.status}.`);
+		// Followed to another site: not Wallhaven's image any more.
+		if (res.url && !imageUrl(res.url)) throw new WallpaperError('The image download was sent to another site.');
 		const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
 		if (!IMAGE_TYPES[type]) throw new WallpaperError(`Not an image (${type || 'no type'}).`);
-		const data = Buffer.from(await res.arrayBuffer());
-		if (data.length < 100 || data.length > MAX_IMAGE) throw new WallpaperError('The image is empty or too large.');
+		if (Number(res.headers.get('content-length')) > MAX_IMAGE) throw new WallpaperError('The image is empty or too large.');
+		// Read piece by piece, so an endless answer is dropped at the limit instead of filling the memory.
+		const chunks = [];
+		let size = 0;
+		for await (const chunk of res.body ?? []) {
+			size += chunk.length;
+			if (size > MAX_IMAGE) {
+				await res.body.cancel().catch(() => {});
+				throw new WallpaperError('The image is empty or too large.');
+			}
+			chunks.push(chunk);
+		}
+		const data = Buffer.concat(chunks);
+		if (data.length < 100) throw new WallpaperError('The image is empty or too large.');
 		return { data, ext: IMAGE_TYPES[type], type };
 	}
 

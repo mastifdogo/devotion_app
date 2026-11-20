@@ -78,13 +78,18 @@ object UpdateLogic {
     fun downloadFor(asset: ReleaseAsset, hasToken: Boolean): AssetDownload? {
         val apiUrl = asset.url?.takeIf { it.isNotBlank() }
         val browserUrl = asset.browserDownloadUrl?.takeIf { it.isNotBlank() }
+        // The token is for GitHub's API and goes nowhere else, whatever address a release names.
+        val tokenAllowed = hasToken && apiUrl != null && isGithubApiUrl(apiUrl)
         return when {
-            hasToken && apiUrl != null -> AssetDownload(apiUrl, "application/octet-stream", useToken = true)
+            tokenAllowed -> AssetDownload(apiUrl!!, "application/octet-stream", useToken = true)
             browserUrl != null -> AssetDownload(browserUrl, null, useToken = false)
-            apiUrl != null -> AssetDownload(apiUrl, "application/octet-stream", useToken = hasToken)
+            apiUrl != null -> AssetDownload(apiUrl, "application/octet-stream", useToken = false)
             else -> null
         }
     }
+
+    /** True for an https address on api.github.com (the only place the GitHub token is sent). */
+    fun isGithubApiUrl(url: String): Boolean = url.trim().startsWith("https://api.github.com/")
 
     /**
      * For a 403/429 answer: seconds to wait when it is a rate limit, or null when it is not

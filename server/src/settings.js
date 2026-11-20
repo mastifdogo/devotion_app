@@ -34,6 +34,8 @@ export const DEFAULTS = {
 	bible_engine: '', // piper | local | none; empty: piper (the Bible is read aloud on demand, chapter by chapter)
 	// Whether a person may ask in the app for the speech API (internet) to read the Bible to them instead.
 	bible_premium: 'on', // on | off
+	// The most new chapters the speech API reads in 24 hours (it bills per chapter, and the app needs no login).
+	bible_premium_daily: '100',
 	// A speech server on the owner's network that speaks OpenAI's /audio/speech API (Kokoro-FastAPI, openedai-speech, LocalAI...).
 	tts_local_base_url: '', // http://192.168.1.50:8880/v1
 	tts_local_key: '', // most need none
@@ -61,7 +63,9 @@ export const DEFAULTS = {
 // Never sent back to the browser; the admin page only learns whether they are set.
 export const SECRET_KEYS = new Set(['google_client_secret', 'google_refresh_token', 'anthropic_api_key', 'tts_openai_key', 'github_token', 'smb_password', 'backup_smb_password', 'tts_local_key']);
 // Managed by the server itself, not by the settings form.
-const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot', 'backup_last_slot']);
+// piper_bin and piper_model say which program this server runs and with which file: they
+// belong to whoever installed it (the environment), never to a request from a browser.
+const INTERNAL_KEYS = new Set(['google_refresh_token', 'google_email', 'piper_voice', 'last_check_slot', 'backup_last_slot', 'piper_bin', 'piper_model']);
 
 export class Settings {
 	constructor(db, env = process.env) {
@@ -120,6 +124,8 @@ export class Settings {
 			if (key === 'bible_engine' && !['piper', 'local', 'none'].includes(v)) continue;
 			if (key === 'bible_premium' && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_local_base_url' && v !== '' && !/^https?:\/\/[^\s"'<>]+$/i.test(v)) continue;
+			if (key === 'tts_openai_base_url' && v !== '' && !/^https?:\/\/[^\s"'<>]+$/i.test(v)) continue;
+			if (key === 'bible_premium_daily' && !/^\d{1,5}$/.test(v)) continue;
 			if ((key === 'premium_lessons' || key === 'premium_readings') && !['off', 'on'].includes(v)) continue;
 			if (key === 'tts_rate' && !['slow', 'normal', 'fast'].includes(v)) continue;
 			if (key === 'archive_days' && !/^[1-9]\d{0,3}$/.test(v)) continue;

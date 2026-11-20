@@ -1,5 +1,5 @@
-// HTTP: the app's API (/api, bearer token), the admin page (/admin, password
-// + session cookie) and Google's OAuth callback.
+// HTTP: the app's API (/api, open to the network the server is on: no login),
+// the admin page (/admin, password + session cookie) and Google's OAuth callback.
 import http from 'node:http';
 import { speechText } from './tts.js';
 import { createReadStream, readFileSync } from 'node:fs';
@@ -18,7 +18,12 @@ const page = (name) => Buffer.from(source(name).replace('<!-- wallpick.js -->', 
 const ADMIN_HTML = page('admin.html');
 const START_HTML = page('start.html');
 const READ_HTML = page('read.html');
-const PAGE_CSP = "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'";
+// Nothing but this server's own pages, scripts and files; never inside another site's frame.
+const CSP_REST = "style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const PAGE_CSP = `default-src 'self'; ${CSP_REST}`;
+const ADMIN_CSP = `default-src 'self'; img-src 'self' https://th.wallhaven.cc; ${CSP_REST}`;
+// On every answer: the type is what the server says it is, no framing, and the address is not passed on to other sites.
+const SAFE_HEADERS = { 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
 const SESSION_MS = 12 * 60 * 60 * 1000;
 
 class HttpError extends Error {
@@ -140,9 +145,29 @@ export function annotationWins(stored, incoming) {
 	return true;
 }
 
-export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups = null, bibleAudio = null, audioDir, log = console }) {
+/**
+ * Who is asking, for counting wrong passwords: the address the connection comes from
+ * (an IPv6 address by its /64, which is what one machine gets). Forwarding headers are
+ * not believed: anyone can write them.
+ */
+export function clientKey(address) {
+	const a = String(address || '').toLowerCase().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '').replace(/%.*$/, '');
+	if (!a.includes(':')) return a;
+	const [head, tail = ''] = a.split('::');
+	const groups = head ? head.split(':') : [];
+	const after = tail ? tail.split(':') : [];
+	const full = a.includes('::') ? [...groups, ...Array(Math.max(0, 8 - groups.length - after.length)).fill('0'), ...after] : groups;
+	return full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':') + '::/64';
+}
+
+// Wrong passwords from one address: after this many in a row it has to wait, longer each time.
+const FREE_GUESSES = 5;
+const FIRST_WAIT_MS = 30_000;
+const LONGEST_WAIT_MS = 15 * 60_000;
+
+export function createServer({ config, db, settings, gmail, pipeline, tts, updater, voices, bibles, archiver, wallpapers, backups = null, bibleAudio = null, audioDir, log = console, loginDelayMs = 500, clock = () => Date.now() }) {
 	const sessions = new Map(); // sid -> expiry
-	let loginFailures = 0;
+	const guesses = new Map(); // clientKey -> { count, until, seen }
 	let lastBackgroundError = null; // shown once by the admin page, then cleared
 
 	const send = (res, status, body, headers = {}) => {
@@ -150,7 +175,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		res.writeHead(status, {
 			'content-type': typeof body === 'string' || Buffer.isBuffer(body) ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8',
 			'cache-control': 'no-store',
-			'x-content-type-options': 'nosniff',
+			...SAFE_HEADERS,
 			...headers,
 		});
 		res.end(data);
@@ -187,17 +212,38 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		if (typeof password !== 'string' || password.length < 8) throw new HttpError(400, 'Choose a password of at least 8 characters.');
 		if (password.length > 200) throw new HttpError(400, 'That password is too long.');
 	};
-	const startSession = (res) => {
+	// Behind an https address (a reverse proxy says so), the cookie is never sent over plain http.
+	const cookieFlags = (req) => `HttpOnly; SameSite=Strict; Path=/${String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`;
+	const startSession = (req, res) => {
 		for (const [sid, exp] of sessions) if (exp < Date.now()) sessions.delete(sid);
 		const sid = randomBytes(24).toString('base64url');
 		sessions.set(sid, Date.now() + SESSION_MS);
-		send(res, 200, { ok: true }, { 'set-cookie': `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}` });
+		send(res, 200, { ok: true }, { 'set-cookie': `sid=${sid}; ${cookieFlags(req)}; Max-Age=${SESSION_MS / 1000}` });
 	};
-	const slowDown = async () => {
-		// Each wrong guess makes the next answer slower, up to 5 s.
-		loginFailures = Math.min(loginFailures + 1, 10);
-		await new Promise((r) => setTimeout(r, loginFailures * 500));
+	// Guessing the password: each wrong one makes the next answer slower, and after five in a row
+	// the address waits (30 s, doubling to 15 minutes) before any password of its is looked at again.
+	// Checked right before a password is, so sending many guesses at once gains nothing.
+	const mayGuess = (req) => {
+		const g = guesses.get(clientKey(req.socket.remoteAddress));
+		const wait = g ? g.until - clock() : 0;
+		if (wait <= 0) return;
+		const text = wait > 90_000 ? `${Math.ceil(wait / 60_000)} minutes` : `${Math.ceil(wait / 1000)} seconds`;
+		throw Object.assign(new HttpError(429, `Too many wrong passwords from this address. Try again in ${text}.`), { headers: { 'retry-after': String(Math.ceil(wait / 1000)) } });
 	};
+	const wrongGuess = async (req) => {
+		const t = clock();
+		// Addresses not heard from for a day are forgotten (and all of them, should the list ever grow absurdly).
+		for (const [k, g] of guesses) if (g.until < t && t - g.seen > 86_400_000) guesses.delete(k);
+		if (guesses.size > 10_000) guesses.clear();
+		const key = clientKey(req.socket.remoteAddress);
+		const g = guesses.get(key) || { count: 0, until: 0, seen: t };
+		g.count++;
+		g.seen = t;
+		if (g.count >= FREE_GUESSES) g.until = t + Math.min(LONGEST_WAIT_MS, FIRST_WAIT_MS * 2 ** Math.min(g.count - FREE_GUESSES, 10));
+		guesses.set(key, g);
+		await new Promise((r) => setTimeout(r, Math.min(g.count, 10) * loginDelayMs));
+	};
+	const rightGuess = (req) => guesses.delete(clientKey(req.socket.remoteAddress));
 
 	const sessionId = (req) => /(?:^|;\s*)sid=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || '')?.[1];
 	const requireAdmin = (req) => {
@@ -265,7 +311,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	// An MP3, whole or the part a player asks for when it jumps ahead ("Range: bytes=1000-").
 	const sendAudio = (req, res, file, size, etag) => {
-		const headers = { 'content-type': 'audio/mpeg', 'accept-ranges': 'bytes', etag: `"${etag}"`, 'cache-control': 'private, max-age=31536000, immutable' };
+		const headers = { ...SAFE_HEADERS, 'content-type': 'audio/mpeg', 'accept-ranges': 'bytes', etag: `"${etag}"`, 'cache-control': 'private, max-age=31536000, immutable' };
 		const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
 		if (range && (range[1] || range[2])) {
 			let start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
@@ -439,7 +485,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		const bible = bibles.get(m[1]);
 		const info = bible && (await stat(bibles.file(bible.id)).catch(() => null));
 		if (!info) throw new HttpError(404, 'This Bible version is not on the server.');
-		const headers = { 'content-type': 'application/json; charset=utf-8', etag: `"${bible.sha256}"`, 'cache-control': 'private, max-age=86400' };
+		const headers = { ...SAFE_HEADERS, 'content-type': 'application/json; charset=utf-8', etag: `"${bible.sha256}"`, 'cache-control': 'private, max-age=86400' };
 		const stream = createReadStream(bibles.file(bible.id)).on('error', () => res.destroy());
 		// Several megabytes of text: compressed when the client can take it.
 		if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
@@ -459,7 +505,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		const [file, type] = m[2] ? [row?.thumb_file, row?.thumb_type] : [row?.file, row?.type];
 		const info = file && (await stat(wallpapers.file(file)).catch(() => null));
 		if (!info) throw new HttpError(404, 'No such wallpaper on this server.');
-		res.writeHead(200, { 'content-type': type, 'content-length': info.size, etag: `"${row.sha256}${m[2] ? '-t' : ''}"`, 'cache-control': 'private, max-age=86400' });
+		res.writeHead(200, { ...SAFE_HEADERS, 'content-type': type, 'content-length': info.size, etag: `"${row.sha256}${m[2] ? '-t' : ''}"`, 'cache-control': 'private, max-age=86400' });
 		createReadStream(wallpapers.file(file)).on('error', () => res.destroy()).pipe(res);
 	});
 
@@ -467,7 +513,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 	// The start page: read and listen, or sign in to the admin panel.
 	route('GET', /^\/$/, (req, res) => send(res, 200, START_HTML, { 'content-security-policy': PAGE_CSP }));
 	route('GET', /^\/read\/?$/, (req, res) => send(res, 200, READ_HTML, { 'content-security-policy': PAGE_CSP }));
-	route('GET', /^\/admin\/?$/, (req, res) => send(res, 200, ADMIN_HTML, { 'content-security-policy': "default-src 'self'; img-src 'self' https://th.wallhaven.cc; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" }));
+	route('GET', /^\/admin\/?$/, (req, res) => send(res, 200, ADMIN_HTML, { 'content-security-policy': ADMIN_CSP }));
 
 	// Tells the page which form to show before anyone is logged in.
 	route('GET', /^\/admin\/api\/session$/, (req, res) => {
@@ -482,28 +528,31 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 		if (passwordSet()) throw new HttpError(409, 'This server is already set up. Log in instead.');
 		checkNewPassword(password);
 		settings.set('admin_password_hash', hashPassword(password));
-		startSession(res);
+		startSession(req, res);
 	});
 
 	route('POST', /^\/admin\/api\/login$/, async (req, res) => {
 		const { password } = await readJson(req);
 		if (!passwordSet()) throw new HttpError(409, 'No password has been chosen yet. Reload the page to set one.');
+		mayGuess(req);
 		if (!passwordOk(password)) {
-			await slowDown();
+			await wrongGuess(req);
 			throw new HttpError(401, 'Wrong password.');
 		}
-		loginFailures = 0;
-		startSession(res);
+		rightGuess(req);
+		startSession(req, res);
 	});
 
 	route('POST', /^\/admin\/api\/password$/, async (req, res) => {
 		requireAdmin(req);
 		const { current, password } = await readJson(req);
 		if (config.adminPassword) throw new HttpError(409, 'The password is fixed by ADMIN_PASSWORD in the server\'s environment and cannot be changed here.');
+		mayGuess(req);
 		if (!passwordOk(current)) {
-			await slowDown();
+			await wrongGuess(req);
 			throw new HttpError(403, 'The current password is wrong.');
 		}
+		rightGuess(req);
 		checkNewPassword(password);
 		settings.set('admin_password_hash', hashPassword(password));
 		// Everyone else is logged out; this browser stays in.
@@ -514,7 +563,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 
 	route('POST', /^\/admin\/api\/logout$/, (req, res) => {
 		sessions.delete(sessionId(req));
-		send(res, 200, { ok: true }, { 'set-cookie': 'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+		send(res, 200, { ok: true }, { 'set-cookie': `sid=; ${cookieFlags(req)}; Max-Age=0` });
 	});
 
 	route('GET', /^\/admin\/api\/state$/, async (req, res) => {
@@ -840,7 +889,7 @@ export function createServer({ config, db, settings, gmail, pipeline, tts, updat
 			const ours = ['UpdateError', 'ArchiveError', 'VoiceError', 'BibleError', 'GmailError', 'WallpaperError'].includes(err.name) || err instanceof HttpError;
 			if (status >= 500 && !ours) log.error(`${req.method} ${url.pathname}:`, err.stack || err.message);
 			if (res.headersSent) return res.destroy();
-			send(res, status, { error: status === 500 && !ours ? 'Something went wrong on the server; see its log.' : err.message });
+			send(res, status, { error: status === 500 && !ours ? 'Something went wrong on the server; see its log.' : err.message }, err instanceof HttpError && err.headers ? err.headers : {});
 		}
 	});
 }

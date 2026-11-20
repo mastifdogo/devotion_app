@@ -63,6 +63,10 @@ pct set <ctid> -mp0 /path/on/host,mp=/var/lib/devotion
 chown 100990:100990 /path/on/host
 ```
 
+Five wrong passwords in a row from one address and that address has to wait
+before it may try again: 30 seconds, then twice as long after each further
+wrong one, up to 15 minutes.
+
 Forgot the admin password? On the Proxmox host:
 
 ```sh
@@ -243,7 +247,10 @@ about 300 MB.
   *Settings → Bible voice*; only the chapters that person then listens to are
   sent to it. *In the app, a person may pick the speech API to read the Bible*
   under **Audio** takes the choice away. The website always uses the server's
-  own voice.
+  own voice. Because the service bills for every chapter and the app has no
+  login, it reads at most 100 new chapters in 24 hours (*The most new
+  chapters the speech API reads in a day*, under **Audio**); chapters it has
+  read before, and the server's own voice, are not limited.
 - **Read the whole Bible with Piper** (under **Audio**): pick a version and
   press *Read it all now*, and the server reads every chapter ahead of time, in
   the voice the Bible is read in, so nobody waits for a chapter. That is many
@@ -292,7 +299,12 @@ repository's latest release only when pressed.
 - **Server**: admin page → *Updates* → *Check for updates* → *Install*. A
   root-owned updater in the container downloads that release, verifies it
   against the release's `SHA256SUMS`, installs it and restarts the server.
-- **App**: Settings → *Check for updates* → *Download and install*.
+  From the admin page only the installed version or a newer one can be
+  installed; to go back to an older release, run `devotion-update v1.2.3` as
+  root in the container.
+- **App**: Settings → *Check for updates* → *Download and install*. The
+  download is opened only if it is this app (Android then checks that it is
+  signed with the same key).
 
 If the repository is private, save a GitHub token (read access to this
 repository) on the admin page and in the app's settings.
