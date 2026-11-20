@@ -9,11 +9,12 @@ try {
 	const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
 	// The wallpaper chosen in the reader, behind this page too.
 	const w = localStorage.getItem('read.wallpaper'); if (w && /^[A-Za-z0-9]{1,16}$/.test(w)) document.documentElement.dataset.wallpaper = w;
+	const x = localStorage.getItem('read.wallBias'); if (x !== null && Number(x) >= 0 && Number(x) <= 1) document.documentElement.style.setProperty('--wall-x', Number(x));
 	const o = Number(localStorage.getItem('read.opacity')); if (o >= 50 && o <= 100) document.documentElement.style.setProperty('--win', o / 100);
 } catch {}
 </script>
 <style>
-:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --win:1; }
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fff; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --win:1; --wall-x:.5; }
 :root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#232220; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; } }
 * { box-sizing: border-box; }
@@ -21,7 +22,7 @@ html, body { height: 100%; }
 body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, sans-serif; display:grid; place-items:center; padding:1rem; }
 main { width:100%; max-width:24rem; text-align:center; }
 html { background:var(--bg); }
-body { background:var(--bg) center / cover no-repeat fixed; }
+body { background:var(--bg) center / cover no-repeat fixed; background-position:calc(var(--wall-x) * 100%) 50%; }
 :root[data-wallpaper] main { max-width:26rem; padding:2rem 1.5rem 1.25rem; border-radius:18px; border:1px solid var(--line); background:color-mix(in srgb, var(--card) calc(var(--win) * 100%), transparent); box-shadow:0 8px 32px rgba(0,0,0,.18); -webkit-backdrop-filter:blur(calc((1 - var(--win)) * 24px)); backdrop-filter:blur(calc((1 - var(--win)) * 24px)); }
 .mark { width:64px; height:64px; margin:0 auto 1rem; border-radius:50%; background:var(--accent); display:grid; place-items:center; }
 .mark svg { width:34px; height:34px; }
@@ -44,24 +45,23 @@ a.choice:focus-visible { outline:3px solid var(--ink); outline-offset:2px; }
 	<a class="choice primary" href="/read">Continue to Devotion<small>Read and listen</small></a>
 	<a class="choice secondary" href="/admin" id="admin">Sign in to the admin panel<small>Settings, Gmail, voices, wallpapers</small></a>
 </main>
+<!-- wallpick.js -->
 <script>
+const root = document.documentElement;
 const show = (id) => { document.body.style.backgroundImage = `url("/api/wallpapers/${encodeURIComponent(id)}")`; };
-let randomTopic = null; try { randomTopic = localStorage.getItem('read.wallRandom'); } catch {}
-if (randomTopic) {
-	// "New each time" (chosen in the reader's settings): a random wallpaper from that topic, kept for the reader.
-	const last = document.documentElement.dataset.wallpaper;
+const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+const last = root.dataset.wallpaper || null;
+if (stored('read.wallRandom')) {
+	// "A new wallpaper each time" (chosen in the reader's settings): picked here by the rules in wallpick.js, and kept for the reader.
 	fetch('/api/wallpapers').then((r) => r.json()).then((lib) => {
-		let pool = (lib.wallpapers || []).filter((w) => randomTopic === 'all' || w.topic === randomTopic);
-		if (!pool.length) pool = lib.wallpapers || [];
-		const others = pool.filter((w) => w.id !== last);
-		const from = others.length ? others : pool;
-		if (!from.length) throw new Error('none');
-		const id = from[Math.floor(Math.random() * from.length)].id;
-		document.documentElement.dataset.wallpaper = id;
-		try { localStorage.setItem('read.wallpaper', id); sessionStorage.setItem('wallFresh', '1'); } catch {}
-		show(id);
+		const chosen = WallPick.choose(lib, stored, last);
+		if (!chosen) throw new Error('none');
+		root.dataset.wallpaper = chosen.id;
+		root.style.setProperty('--wall-x', chosen.bias);
+		try { localStorage.setItem('read.wallpaper', chosen.id); localStorage.setItem('read.wallBias', String(chosen.bias)); sessionStorage.setItem('wallFresh', '1'); } catch {}
+		show(chosen.id);
 	}).catch(() => { if (last) show(last); });
-} else if (document.documentElement.dataset.wallpaper) show(document.documentElement.dataset.wallpaper);
+} else if (last) show(last);
 // A new server has no admin password yet: say that the admin panel sets one up.
 fetch('/admin/api/session').then((r) => r.json()).then((s) => {
 	if (s.needs_setup) document.getElementById('admin').firstChild.textContent = 'Set up the admin panel';

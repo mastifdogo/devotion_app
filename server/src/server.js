@@ -11,7 +11,10 @@ import path from 'node:path';
 import { TOPICS } from './wallpapers.js';
 import { wallClock } from './schedule.js';
 
-const page = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), name));
+const source = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), name), 'utf8');
+// The pages are single files. The one script two of them share (which wallpaper a visit gets) is put into each here.
+const WALLPICK = `<script>\n${source('wallpick.js')}</script>`;
+const page = (name) => Buffer.from(source(name).replace('<!-- wallpick.js -->', () => WALLPICK));
 const ADMIN_HTML = page('admin.html');
 const START_HTML = page('start.html');
 const READ_HTML = page('read.html');

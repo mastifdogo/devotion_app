@@ -5,6 +5,8 @@ import { parseMessage, redirectUri } from '../src/gmail.js';
 import { chunkText, speechText } from '../src/tts.js';
 import { compareVersions, TAG_RE } from '../src/update.js';
 import { normalizeEntries } from '../src/extract.js';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
 
@@ -137,4 +139,69 @@ test('mp3Duration walks the frames; parseWav reads streamed WAVs', async () => {
 	wav.writeUInt32LE(0xffffffff, 40); // a streamed file does not know its size
 	assert.equal(parseWav(wav).data.length, 16000);
 	assert.throws(() => parseWav(Buffer.alloc(100, 1)));
+});
+
+// The script the start page and the reader share, run as the browser runs it.
+const WallPick = vm.runInNewContext(readFileSync(new URL('../src/wallpick.js', import.meta.url), 'utf8') + '\nWallPick');
+// A stand-in for Math.random that goes through the given values, again and again.
+const sequence = (...values) => { let i = 0; return () => values[i++ % values.length]; };
+
+test('WallPick: a new wallpaper from the topic, never the same twice running', () => {
+	const library = { wallpapers: [{ id: 'a', topic: 'nature' }, { id: 'b', topic: 'nature' }, { id: 'c', topic: 'sky' }] };
+	for (const r of [0, 0.3, 0.6, 0.999]) assert.equal(WallPick.pick(library, { topic: 'nature', current: 'a', random: () => r }).id, 'b');
+	const seen = new Set();
+	for (let i = 0; i < 20; i++) seen.add(WallPick.pick(library, { topic: 'all', current: 'a', random: () => i / 20 }).id);
+	assert.deepEqual([...seen].sort(), ['b', 'c']);
+	// Only one in the topic: it may come again. A topic the server no longer has means all of them.
+	assert.equal(WallPick.pick(library, { topic: 'sky', current: 'c' }).id, 'c');
+	assert.notEqual(WallPick.pick(library, { topic: 'gone', current: 'a' }).id, 'a');
+	assert.equal(WallPick.pick({ wallpapers: [] }), null);
+	assert.equal(WallPick.pick(null), null);
+	assert.equal(WallPick.pick({ wallpapers: [{ id: 'only' }] }, { random: () => 1 }).id, 'only'); // a random of exactly 1 stays in the list
+});
+
+test('WallPick: which wallpapers are dark, as the app decides it', () => {
+	assert.equal(WallPick.isDark({ colors: ['#0b1026', '#1c2541', '#3a506b'] }), true);
+	assert.equal(WallPick.isDark({ colors: ['#f5f0e1', '#c9d6df', '#52616b'] }), false);
+	// The first colours weigh most.
+	assert.equal(WallPick.isDark({ colors: ['#101010', '#151515', '#181818', '#ffffff'] }), true);
+	assert.equal(WallPick.isDark({ colors: ['#ffffff', '#f0f0f0', '#eeeeee', '#000000'] }), false);
+	// Unknown colours: not counted as dark.
+	assert.equal(WallPick.isDark({ colors: [] }), false);
+	assert.equal(WallPick.isDark({}), false);
+	assert.equal(WallPick.isDark({ colors: ['red', 'url(x)'] }), false);
+	assert.equal(WallPick.meanLuminance([]), null);
+	assert.ok(Math.abs(WallPick.meanLuminance(['#ffffff', 'bad', '#000000']) - 2 / 3) < 1e-9); // weights 2 and 1
+});
+
+test('WallPick: dark ones in the evening when asked for, and a random part of a wide picture', () => {
+	const library = { wallpapers: [{ id: 'night', colors: ['#050505'] }, { id: 'day', colors: ['#ffffff'] }, { id: 'dusk', colors: ['#101820'] }] };
+	const seen = new Set();
+	for (let i = 0; i < 20; i++) seen.add(WallPick.pick(library, { darkOnly: true, random: () => i / 20 }).id);
+	assert.deepEqual([...seen].sort(), ['dusk', 'night']);
+	assert.equal(WallPick.pick(library, { darkOnly: true, current: 'night' }).id, 'dusk');
+	// No dark wallpaper at all: any of them.
+	assert.ok(WallPick.pick({ wallpapers: [{ id: 'day', colors: ['#ffffff'] }] }, { darkOnly: true }));
+
+	// The evening: from 19:00 until 07:00 unless set otherwise; a window may pass midnight.
+	assert.deepEqual([WallPick.minutes('19:00'), WallPick.minutes('7:05'), WallPick.minutes('24:00'), WallPick.minutes('soon'), WallPick.minutes(null)], [1140, 425, null, null, null]);
+	assert.deepEqual([[1200, 1140, 420], [60, 1140, 420], [419, 1140, 420], [420, 1140, 420], [720, 1140, 420], [600, 540, 1020], [600, 600, 600]].map((a) => WallPick.inWindow(...a)), [true, true, true, false, false, true, false]);
+
+	const browser = (values) => (key) => values[key] ?? null;
+	const at = (hour) => new Date(2026, 10, 20, hour, 30);
+	// Kept: nothing is chosen.
+	assert.equal(WallPick.choose(library, browser({}), 'day'), null);
+	// A new one each time, dark not asked for: any but the last, with the part of it to show.
+	assert.deepEqual({ ...WallPick.choose(library, browser({ 'read.wallRandom': 'all' }), 'night', { now: at(22), random: sequence(0, 0.25) }) }, { id: 'day', bias: 0.25 });
+	// Asked for: dark in the evening, anything by day.
+	const dark = { 'read.wallRandom': 'all', 'read.wallDark': '1' };
+	for (let i = 0; i < 10; i++) assert.notEqual(WallPick.choose(library, browser(dark), null, { now: at(22), random: () => i / 10 }).id, 'day');
+	for (let i = 0; i < 10; i++) assert.notEqual(WallPick.choose(library, browser(dark), null, { now: at(3), random: () => i / 10 }).id, 'day');
+	assert.equal(WallPick.choose(library, browser(dark), 'night', { now: at(12), random: sequence(0, 0.5) }).id, 'day');
+	// The person's own hours.
+	const own = { ...dark, 'read.wallDarkFrom': '09:00', 'read.wallDarkUntil': '17:00' };
+	assert.equal(WallPick.choose(library, browser(own), 'night', { now: at(12), random: sequence(0.9, 0.5) }).id, 'dusk');
+	assert.equal(WallPick.choose(library, browser(own), 'night', { now: at(22), random: sequence(0, 0.5) }).id, 'day');
+	// A browser that refuses storage keeps the wallpaper.
+	assert.equal(WallPick.choose(library, () => { throw new Error('blocked'); }, null), null);
 });

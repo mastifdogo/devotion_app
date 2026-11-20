@@ -182,6 +182,14 @@ either with its ×. On a phone, one at a time. The ⚙ icon opens a settings
 page: your profile, the theme, a wallpaper from the server, the window
 opacity, and how much darker list items are than the window. The house icon goes back to the start page.
 
+The wallpaper works as in the app. *Keep my wallpaper* stays with the one
+you chose; *A new wallpaper each time* picks another whenever the website is
+opened (the start page or the reader), from all topics or the one you
+choose, never the same twice in a row, and of a picture wider than the
+window a different part each time. *Prefer dark wallpapers in the evening*
+takes only dark ones between the two times you set (19:00 to 07:00 unless
+changed), when the server has any. These choices are kept in the browser.
+
 **Autoplay** works here as in the app (see [The Android app](#the-android-app)):
 when a reading or lesson has been heard to the end, the latest unread daily
 reading opens and plays, then the latest unread lesson, then the Bible from

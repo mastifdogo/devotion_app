@@ -5,22 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Devotion</title>
 <script>
-// Before the page paints: this browser's theme, wallpaper, opacity and shade.
+// Before the page paints: this browser's theme, wallpaper (and which part of it), opacity and shade.
 try {
 	const t = localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
 	const w = localStorage.getItem('read.wallpaper'); if (w && /^[A-Za-z0-9]{1,16}$/.test(w)) document.documentElement.dataset.wallpaper = w;
+	const x = localStorage.getItem('read.wallBias'); if (x !== null && Number(x) >= 0 && Number(x) <= 1) document.documentElement.style.setProperty('--wall-x', Number(x));
 	const o = Number(localStorage.getItem('read.opacity')); if (o >= 50 && o <= 100) document.documentElement.style.setProperty('--win', o / 100);
 	const s = localStorage.getItem('read.itemShade'); if (s !== null && Number(s) >= 0 && Number(s) <= 100) document.documentElement.style.setProperty('--shade', Number(s) / 100);
 	const r = Number(localStorage.getItem('read.split')); if (r >= 0.2 && r <= 0.8) document.documentElement.style.setProperty('--split', r);
 } catch {}
 </script>
 <style>
-:root { color-scheme: light; --bg:#f6f4ef; --card:#fffdf9; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --mark:#f6e7a8; --win:1; --shade:.4; --split:.5; --hl-yellow:#fff176; --hl-green:#c5e1a5; --hl-blue:#a9d4fa; --hl-pink:#f8bbd0; }
+:root { color-scheme: light; --bg:#f6f4ef; --card:#fffdf9; --ink:#22201c; --muted:#6b665d; --line:#ddd8cc; --accent:#3d5a80; --mark:#f6e7a8; --win:1; --shade:.4; --split:.5; --wall-x:.5; --hl-yellow:#fff176; --hl-green:#c5e1a5; --hl-blue:#a9d4fa; --hl-pink:#f8bbd0; }
 :root[data-theme="dark"] { color-scheme: dark; --bg:#191816; --card:#25241f; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; --hl-yellow:#6b5a00; --hl-green:#2b5e2f; --hl-blue:#1d4e80; --hl-pink:#7a2f58; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#191816; --card:#25241f; --ink:#ece8df; --muted:#a39d91; --line:#3a3834; --accent:#8fb3de; --mark:#5b4e1f; --hl-yellow:#6b5a00; --hl-green:#2b5e2f; --hl-blue:#1d4e80; --hl-pink:#7a2f58; } }
 * { box-sizing: border-box; }
 html { background:var(--bg); }
-body { margin:0; min-height:100vh; color:var(--ink); font:16px/1.6 system-ui, sans-serif; background:var(--bg) center / cover no-repeat fixed; }
+body { margin:0; min-height:100vh; color:var(--ink); font:16px/1.6 system-ui, sans-serif; background:var(--bg) center / cover no-repeat fixed; background-position:calc(var(--wall-x) * 100%) 50%; }
 button, input, select { font:inherit; color:inherit; }
 
 /* Windows, as in the app: the window colour at the chosen opacity, nothing blurred behind it. */
@@ -133,6 +134,8 @@ select option { background:var(--card); color:var(--ink); }
 .wall { aspect-ratio:9/16; border-radius:8px; overflow:hidden; border:2px solid transparent; padding:0; cursor:pointer; background:var(--line) center / cover; }
 .wall[aria-pressed="true"] { border-color:var(--accent); }
 .wall.none { display:grid; place-items:center; font-size:.8rem; color:var(--muted); background:var(--bg); border:1px dashed var(--line); }
+.settings input[type=time] { padding:.2rem .4rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+.settings input[type=time]:disabled { opacity:.5; }
 .slider { display:flex; align-items:center; gap:.7rem; margin-top:.6rem; }
 .slider input { flex:1; accent-color:var(--accent); }
 .slider span:first-child { min-width:8rem; }
@@ -239,6 +242,7 @@ body.settings-open #settings-pane { display:block; }
 <div class="selbar" id="selbar" hidden role="toolbar" aria-label="Highlight the selected text"></div>
 <div class="toast" id="toast" hidden role="status"></div>
 
+<!-- wallpick.js -->
 <script>
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -310,22 +314,23 @@ function applyWallpaper() {
 	document.body.style.backgroundImage = id ? `url("/api/wallpapers/${encodeURIComponent(id)}")` : '';
 	measureTop();
 }
-function setWallpaper(id) {
+// bias: which part of an image wider than the window shows (0 = its left edge, 1 = its right edge).
+// One chosen by hand is centred.
+function setWallpaper(id, bias = null) {
 	if (id) root.dataset.wallpaper = id; else delete root.dataset.wallpaper;
 	store.set('read.wallpaper', id || null);
+	const x = id && bias != null && bias >= 0 && bias <= 1 ? bias : null;
+	store.set('read.wallBias', x == null ? null : String(x));
+	if (x == null) root.style.removeProperty('--wall-x'); else root.style.setProperty('--wall-x', x);
 	applyWallpaper();
 }
-// "A new one each time": a random wallpaper from the chosen topic whenever the website is opened.
+// "A new one each time": a random wallpaper whenever the website is opened, by the rules in wallpick.js
+// (the chosen topic, dark ones in the evening when asked for, a random crop of a wide image).
 // read.wallRandom holds the topic ('all' or a topic id); unset means a fixed wallpaper (or none).
 function pickRandomWallpaper() {
-	const topic = store.get('read.wallRandom', null);
-	if (!topic) return false;
-	let pool = library.wallpapers.filter((w) => topic === 'all' || w.topic === topic);
-	if (!pool.length) pool = library.wallpapers;
-	const others = pool.filter((w) => w.id !== root.dataset.wallpaper);
-	const from = others.length ? others : pool;
-	if (!from.length) return false;
-	setWallpaper(from[Math.floor(Math.random() * from.length)].id);
+	const chosen = WallPick.choose(library, (key) => store.get(key, null), root.dataset.wallpaper || null);
+	if (!chosen) return false;
+	setWallpaper(chosen.id, chosen.bias);
 	return true;
 }
 function setPercent(varName, key, pct, min) {
@@ -1218,28 +1223,47 @@ function renderSettings(pane) {
 
 	s.append(el('h3', 'Wallpaper'));
 	s.append(el('p', library.wallpapers.length ? 'Wallpapers from this server (from wallhaven.cc). Your choice is kept in this browser.' : 'This server has no wallpapers yet: they are added on its admin panel.', 'small muted'));
-	const chips = el('div', null, 'choices');
+	const randomTopic = store.get('read.wallRandom', null);
+	const randomOn = Boolean(randomTopic);
+	const chip = (label, pressed, onclick) => { const b = el('button', label, 'chip'); b.type = 'button'; b.setAttribute('aria-pressed', String(pressed)); b.onclick = onclick; return b; };
+	if (library.wallpapers.length) {
+		// As in the app: keep the wallpaper, or a new one on each visit (from a topic, darker in the evening).
+		const each = el('div', null, 'choices');
+		each.append(el('span', 'Each time the website is opened:', 'muted'));
+		each.append(chip('Keep my wallpaper', !randomOn, () => { store.set('read.wallRandom', null); render(); }));
+		each.append(chip('A new wallpaper each time', randomOn, () => { if (!randomOn) { store.set('read.wallRandom', 'all'); pickRandomWallpaper(); } render(); }));
+		s.append(each);
+		if (randomOn) {
+			const known = randomTopic === 'all' || library.topics.some((t) => t.id === randomTopic);
+			const from = el('div', null, 'choices'); from.style.marginTop = '.5rem';
+			from.append(el('span', 'From', 'muted'));
+			for (const t of [{ id: 'all', name: 'All topics' }, ...library.topics]) {
+				from.append(chip(t.name, t.id === randomTopic || (t.id === 'all' && !known), () => { store.set('read.wallRandom', t.id); pickRandomWallpaper(); render(); }));
+			}
+			s.append(from);
+			const p = WallPick.prefs((key) => store.get(key, null));
+			const clock = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+			const dark = el('div', null, 'choices'); dark.style.marginTop = '.5rem';
+			dark.append(chip('Prefer dark wallpapers in the evening', p.dark, () => { store.set('read.wallDark', p.dark ? null : '1'); if (!p.dark) pickRandomWallpaper(); render(); }));
+			const time = (label, key, value) => {
+				const input = el('input'); input.type = 'time'; input.value = clock(value); input.disabled = !p.dark; input.setAttribute('aria-label', label);
+				input.onchange = () => { if (WallPick.minutes(input.value) != null) store.set(key, input.value); };
+				return input;
+			};
+			dark.append(el('span', 'from', 'muted'), time('Dark wallpapers from', 'read.wallDarkFrom', p.from), el('span', 'until', 'muted'), time('Dark wallpapers until', 'read.wallDarkUntil', p.until));
+			s.append(dark);
+			s.append(el('p', 'A new wallpaper is chosen each time the website is opened, never the same one twice in a row; of a picture wider than the window, a different part each time. Choose one below to keep it instead.', 'small muted'));
+		}
+	}
+	const chips = el('div', null, 'choices'); chips.style.marginTop = '.8rem';
 	const all = [{ id: 'all', name: 'All', count: library.wallpapers.length }, ...library.topics];
 	if (!all.some((t) => t.id === wallTopic)) wallTopic = 'all';
-	for (const t of all) {
-		const b = el('button', `${t.name} ${t.count}`, 'chip'); b.type = 'button';
-		b.setAttribute('aria-pressed', String(t.id === wallTopic));
-		b.onclick = () => { wallTopic = t.id; render(); };
-		chips.append(b);
-	}
+	for (const t of all) chips.append(chip(`${t.name} ${t.count}`, t.id === wallTopic, () => { wallTopic = t.id; render(); }));
 	s.append(chips);
 	const grid = el('div', null, 'walls');
 	const none = el('button', 'None', 'wall none'); none.type = 'button';
-	const randomOn = Boolean(store.get('read.wallRandom', null));
 	none.setAttribute('aria-pressed', String(!root.dataset.wallpaper && !randomOn)); none.onclick = () => { store.set('read.wallRandom', null); setWallpaper(null); render(); };
 	grid.append(none);
-	if (library.wallpapers.length) {
-		const rnd = el('button', 'New each time', 'wall none'); rnd.type = 'button';
-		rnd.title = 'A random wallpaper' + (wallTopic === 'all' ? '' : ' from this topic') + ' every time the website is opened';
-		rnd.setAttribute('aria-pressed', String(randomOn));
-		rnd.onclick = () => { store.set('read.wallRandom', wallTopic); pickRandomWallpaper(); render(); };
-		grid.append(rnd);
-	}
 	for (const w of library.wallpapers.filter((w) => wallTopic === 'all' || w.topic === wallTopic)) {
 		const b = el('button', null, 'wall'); b.type = 'button';
 		b.style.backgroundColor = w.colors?.[0] || '';
@@ -1250,11 +1274,6 @@ function renderSettings(pane) {
 		grid.append(b);
 	}
 	s.append(grid);
-	if (randomOn) {
-		const t = store.get('read.wallRandom', 'all');
-		const name = library.topics.find((x) => x.id === t)?.name;
-		s.append(el('p', `A new wallpaper${name ? ` from “${name}”` : ''} is chosen each time the website is opened. Choose one above to keep it instead.`, 'small muted'));
-	}
 
 	const slider = (label, key, cssVar, min, def, disabled) => {
 		const row = el('label', null, 'slider small');

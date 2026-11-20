@@ -189,7 +189,14 @@ test('first visit sets the password; afterwards only that password logs in', asy
 	assert.match(startHtml, /href="\/read"[^>]*>Continue to Devotion/);
 	assert.match(startHtml, /href="\/admin"[^>]*>Sign in to the admin panel/);
 	assert.match(start.headers.get('content-security-policy'), /default-src 'self'/);
-	assert.match(await (await call('/read')).text(), /<title>Devotion<\/title>/);
+	const read = await call('/read');
+	const readHtml = await read.text();
+	assert.match(readHtml, /<title>Devotion<\/title>/);
+	// Both carry the script that chooses a visit's wallpaper, put in by the server.
+	for (const html of [startHtml, readHtml]) {
+		assert.match(html, /const WallPick = /);
+		assert.ok(!html.includes('<!-- wallpick.js -->'));
+	}
 });
 
 test('settings: secrets are write-only and an empty secret keeps the saved one', async (t) => {
