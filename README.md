@@ -182,6 +182,16 @@ either with its ×. On a phone, one at a time. The ⚙ icon opens a settings
 page: your profile, the theme, a wallpaper from the server, the window
 opacity, and how much darker list items are than the window. The house icon goes back to the start page.
 
+**Autoplay** works here as in the app (see [The Android app](#the-android-app)):
+when a reading or lesson has been heard to the end, the latest unread daily
+reading opens and plays, then the latest unread lesson, then the Bible from
+the chapter autoplay reached. A reading counts as read once it was heard or
+scrolled to the end. What is read and the place in the Bible are kept in the
+browser, per profile, separately from the app's. Settings has the switch and
+shows the place, with *Start over*. Some browsers (Safari on a phone above
+all) will not start audio by themselves: the next item then opens with its
+player waiting to be pressed.
+
 ### Wallpapers
 
 Under **Wallpapers**, pick a topic (Nature, Mountains, Ocean, … or your own

@@ -380,6 +380,57 @@ function availableBibles() {
 	return { list: mine.length ? mine : serverBibles, mine: mine.length > 0 };
 }
 
+// --- Autoplay -----------------------------------------------------------------------
+// When a reading or lesson has been heard to the end, the next thing plays by itself: the latest
+// unread daily reading; when all are read, the latest unread lesson; when those are read too, the
+// Bible, a chapter after the other from where autoplay left it. What counts as read (heard or
+// scrolled to the end) and the place in the Bible are kept in this browser, per profile. Only
+// autoplay moves that place: chapters played by hand leave it alone.
+const who = () => profile?.id ?? 0;
+function readIds() { try { return new Set(JSON.parse(store.get(`read.done.${who()}`, '[]'))); } catch { return new Set(); } }
+function markRead(id) { const ids = readIds(); if (ids.has(id)) return; ids.add(id); store.set(`read.done.${who()}`, JSON.stringify([...ids])); }
+const autoplayOn = () => store.get('read.autoplay', '1') === '1';
+// { book, chapter, at (seconds into it), finished, title }: the chapter autoplay played last.
+function biblePlace() { try { return JSON.parse(store.get(`read.biblePlace.${who()}`, 'null')); } catch { return null; } }
+function saveBiblePlace(place) { store.set(`read.biblePlace.${who()}`, place ? JSON.stringify(place) : null); }
+// What render() is to start playing: { entry: id } or { bible: { version, book, chapter, at } }.
+let autoStart = null;
+const hasAudio = (e) => !e.deleted && Boolean((e.audio && e.audio.length) || e.has_audio);
+function nextUnread(finishedId) {
+	const read = readIds();
+	for (const kind of ['daily_reading', 'lesson']) {
+		const e = entries.filter((x) => kindOf(x) === kind && x.id !== finishedId && !read.has(x.id) && hasAudio(x)).sort((a, b) => sortKey(b).localeCompare(sortKey(a)))[0];
+		if (e) return e;
+	}
+	return null;
+}
+// An unfinished chapter again, from where it stopped; after a finished one the next chapter, the next
+// book's first, and after the last book the first again. counts: the chapters each book has.
+function nextChapter(place, counts) {
+	const first = counts.findIndex((n) => n > 0);
+	if (first < 0) return null;
+	const start = { book: first, chapter: 1, at: 0 };
+	if (!place || !Number.isInteger(place.book) || !Number.isInteger(place.chapter) || !(place.chapter >= 1 && place.chapter <= counts[place.book])) return start;
+	if (!place.finished) return { book: place.book, chapter: place.chapter, at: Math.max(0, Number(place.at) || 0) };
+	if (place.chapter < counts[place.book]) return { book: place.book, chapter: place.chapter + 1, at: 0 };
+	for (let b = place.book + 1; b < counts.length; b++) if (counts[b] > 0) return { book: b, chapter: 1, at: 0 };
+	return start;
+}
+// Something was heard to the end (finishedId: the reading, or null for a chapter): open and play what follows.
+async function autoplayNext(finishedId) {
+	if (!autoplayOn()) return;
+	const e = nextUnread(finishedId);
+	if (e) { autoStart = { entry: e.id }; go({ entry: e.id }, wide.matches ? undefined : 'reading'); return; }
+	const version = bibleAudio && defaultVersion();
+	if (!version) return;
+	let v;
+	try { v = await loadVersion(version); } catch { return; }
+	const step = nextChapter(biblePlace(), v.books.map((b) => b.chapters.length));
+	if (!step) return;
+	autoStart = { bible: { version, book: step.book, chapter: step.chapter, at: step.at } };
+	go({ bible: { version, book: step.book, chapter: step.chapter } }, wide.matches ? undefined : 'bible');
+}
+
 // --- Bible ------------------------------------------------------------------------
 async function loadVersion(id) {
 	if (bible?.id === id) return bible;
@@ -529,6 +580,18 @@ function listenCard(pane, version, book, chapter, versesBox) {
 	player.addEventListener('play', () => { player.playbackRate = Number(speedSel.value); });
 
 	let times = [], asking = false, loaded = false, startVerse = null;
+	// Autoplay's own chapter (see autoplayNext): it records how far it got, and the next one follows it.
+	const wanted = autoStart?.bible;
+	const auto = Boolean(wanted && wanted.version === version && wanted.book === book && wanted.chapter === chapter);
+	let autoAt = auto ? wanted.at || 0 : 0, lastSaved = autoAt;
+	if (auto) autoStart = null;
+	const place = (at, finished) => saveBiblePlace({ book, chapter, at, finished, title: `${bible?.books[book]?.name || ''} ${chapter}`.trim() });
+	if (auto) {
+		place(autoAt, false);
+		player.addEventListener('timeupdate', () => { if (Math.abs(player.currentTime - lastSaved) >= 5) { lastSaved = player.currentTime; place(lastSaved, false); } });
+		player.addEventListener('pause', () => { if (!player.ended) place(player.currentTime, false); });
+		player.addEventListener('ended', () => { place(0, true); if (box.isConnected) autoplayNext(null); });
+	}
 	// Where the words being read are on the screen: in the verse being read, as far down it as the voice is through it.
 	const spokenY = () => {
 		if (!loaded || !times.length) return null;
@@ -550,7 +613,8 @@ function listenCard(pane, version, book, chapter, versesBox) {
 
 	const begin = () => {
 		if (startVerse != null) { const t = times.find((x) => x.verse === startVerse); if (t) player.currentTime = t.start; startVerse = null; }
-		player.play().catch(() => {});
+		// A browser may refuse to start audio by itself: the player is there to press.
+		player.play().catch(() => { if (auto) note.textContent = 'Press play to carry on listening.'; });
 	};
 	const ask = async () => {
 		if (asking) return;
@@ -562,8 +626,12 @@ function listenCard(pane, version, book, chapter, versesBox) {
 				const j = await r.json().catch(() => ({}));
 				if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
 				times = Array.isArray(j.verses) ? j.verses : [];
+				// A chapter autoplay stopped in is taken up again at the verse it was in.
+				if (autoAt > 0 && startVerse == null) { startVerse = times.filter((x) => x.start <= autoAt).pop()?.verse ?? null; autoAt = 0; }
 				note.textContent = ''; button.hidden = true; player.hidden = false;
 				loaded = true;
+				// It is about to be played: without this, starting at a verse would wait for a length that is never fetched.
+				player.preload = 'auto';
 				player.src = url;
 				if (startVerse != null) player.addEventListener('loadedmetadata', begin, { once: true }); else begin();
 				return;
@@ -581,6 +649,8 @@ function listenCard(pane, version, book, chapter, versesBox) {
 		scroll._hold();
 	};
 	box.append(button, note, player, scroll, speedSel);
+	// Once the card is on the page (asking stops when it is not).
+	if (auto) setTimeout(ask, 0);
 	return box;
 }
 
@@ -931,6 +1001,13 @@ function renderEntry(pane, e) {
 		speedSel.onchange = () => { store.set('read.speed', speedSel.value); player.playbackRate = Number(speedSel.value); };
 		player.addEventListener('play', () => { player.playbackRate = Number(speedSel.value); });
 		load(false);
+		// Heard to the end: read, and the next unread one (or the Bible) follows.
+		player.addEventListener('ended', () => { markRead(e.id); if (box.isConnected) autoplayNext(e.id); });
+		if (autoStart?.entry === e.id) {
+			autoStart = null;
+			// A browser may refuse to start audio by itself: the player is there to press.
+			player.play().catch(() => toast('Press play to carry on listening.'));
+		}
 		box.append(player);
 		if (audio.length > 1) box.append(voiceSel);
 		// There are no word timings for a reading, so the place is worked out from how far through the audio it is.
@@ -969,6 +1046,12 @@ function renderEntry(pane, e) {
 		body._draw();
 	} else if (e.archived) body.append(el('p', 'Archived on the server: the full text is no longer available here.', 'muted'));
 	art.append(body);
+	if (e.body && 'IntersectionObserver' in window) {
+		// Scrolled to the end of the text: read.
+		const end = el('div');
+		const seen = new IntersectionObserver((xs) => { if (xs.some((x) => x.isIntersecting)) { markRead(e.id); seen.disconnect(); } });
+		art.append(end); seen.observe(end);
+	}
 	if (e.body) art.append(notesList({ entry_id: e.id }, 'reading'));
 	pane.append(floaters(back, closeButton('reading')), art);
 	pane.scrollTop = 0;
@@ -1105,6 +1188,23 @@ function renderSettings(pane) {
 	prof.append(el('span', profile ? `You are reading as ${profile.name}.` : 'No name chosen yet.', 'muted'));
 	const sw = el('button', profile ? 'Switch' : 'Choose your name', 'chip'); sw.type = 'button'; sw.onclick = () => askProfile();
 	prof.append(sw); s.append(prof);
+
+	s.append(el('h3', 'Autoplay'));
+	const auto = el('div', null, 'choices');
+	for (const [value, label] of [['1', 'On'], ['0', 'Off']]) {
+		const b = el('button', label, 'chip'); b.type = 'button';
+		b.setAttribute('aria-pressed', String(autoplayOn() === (value === '1')));
+		b.onclick = () => { store.set('read.autoplay', value); render(); };
+		auto.append(b);
+	}
+	s.append(auto, el('p', 'When a reading or lesson has been heard to the end, the latest unread daily reading plays, then the latest unread lesson, then the Bible from where autoplay left it. What you have read, and that place, are kept in this browser.', 'small muted'));
+	const place = biblePlace();
+	if (place) {
+		const row = el('div', null, 'choices');
+		row.append(el('span', `In the Bible, autoplay ${place.finished ? 'has read' : 'is in'} ${place.title || `book ${place.book + 1}, chapter ${place.chapter}`}.`, 'muted'));
+		const over = el('button', 'Start over', 'chip'); over.type = 'button'; over.onclick = () => { saveBiblePlace(null); render(); };
+		row.append(over); s.append(row);
+	}
 
 	s.append(el('h3', 'Theme'));
 	const themes = el('div', null, 'choices');
