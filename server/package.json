@@ -1,6 +1,6 @@
 {
   "name": "devotion-server",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Turns emails from a Gmail inbox into devotion entries with narrated audio",
